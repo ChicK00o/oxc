@@ -221,6 +221,15 @@ pub struct ParseOptions {
     ///
     /// [`V8IntrinsicExpression`]: oxc_ast::ast::V8IntrinsicExpression
     pub allow_v8_intrinsics: bool,
+
+    /// Enable error recovery for invalid assignment targets.
+    ///
+    /// When `true`, the parser recovers from invalid assignment target errors
+    /// and continues parsing to report all errors (useful for type-checking).
+    /// When `false`, the parser terminates on these errors (faster for transpilation).
+    ///
+    /// Default: `false`
+    pub recover_from_errors: bool,
 }
 
 impl Default for ParseOptions {
@@ -231,6 +240,7 @@ impl Default for ParseOptions {
             allow_return_outside_function: false,
             preserve_parens: true,
             allow_v8_intrinsics: false,
+            recover_from_errors: false,
         }
     }
 }
