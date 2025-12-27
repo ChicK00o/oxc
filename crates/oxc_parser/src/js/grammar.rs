@@ -39,7 +39,11 @@ impl<'a> CoverGrammar<'a, Expression<'a>> for SimpleAssignmentTarget<'a> {
                 let span = expr.span;
                 match expr.unbox().expression {
                     Expression::ObjectExpression(_) | Expression::ArrayExpression(_) => {
-                        p.fatal_error(diagnostics::invalid_assignment(span))
+                        p.error(diagnostics::invalid_assignment(span));
+                        // Return dummy identifier to allow parsing to continue
+                        SimpleAssignmentTarget::AssignmentTargetIdentifier(
+                            p.ast.alloc(p.ast.identifier_reference(span, p.ast.atom("__invalid_assign_target__")))
+                        )
                     }
                     expr => SimpleAssignmentTarget::cover(expr, p),
                 }
@@ -51,7 +55,13 @@ impl<'a> CoverGrammar<'a, Expression<'a>> for SimpleAssignmentTarget<'a> {
                 | Expression::PrivateFieldExpression(_) => {
                     SimpleAssignmentTarget::TSAsExpression(expr)
                 }
-                _ => p.fatal_error(diagnostics::invalid_assignment(expr.span())),
+                _ => {
+                    p.error(diagnostics::invalid_assignment(expr.span()));
+                    // Return dummy identifier to allow parsing to continue
+                    SimpleAssignmentTarget::AssignmentTargetIdentifier(
+                        p.ast.alloc(p.ast.identifier_reference(expr.span(), p.ast.atom("__invalid_assign_target__")))
+                    )
+                }
             },
             Expression::TSSatisfiesExpression(expr) => {
                 match expr.expression.get_inner_expression() {
@@ -61,7 +71,13 @@ impl<'a> CoverGrammar<'a, Expression<'a>> for SimpleAssignmentTarget<'a> {
                     | Expression::PrivateFieldExpression(_) => {
                         SimpleAssignmentTarget::TSSatisfiesExpression(expr)
                     }
-                    _ => p.fatal_error(diagnostics::invalid_assignment(expr.span())),
+                    _ => {
+                        p.error(diagnostics::invalid_assignment(expr.span()));
+                        // Return dummy identifier to allow parsing to continue
+                        SimpleAssignmentTarget::AssignmentTargetIdentifier(
+                            p.ast.alloc(p.ast.identifier_reference(expr.span(), p.ast.atom("__invalid_assign_target__")))
+                        )
+                    }
                 }
             }
             Expression::TSNonNullExpression(expr) => match expr.expression.get_inner_expression() {
@@ -71,7 +87,13 @@ impl<'a> CoverGrammar<'a, Expression<'a>> for SimpleAssignmentTarget<'a> {
                 | Expression::PrivateFieldExpression(_) => {
                     SimpleAssignmentTarget::TSNonNullExpression(expr)
                 }
-                _ => p.fatal_error(diagnostics::invalid_assignment(expr.span())),
+                _ => {
+                    p.error(diagnostics::invalid_assignment(expr.span()));
+                    // Return dummy identifier to allow parsing to continue
+                    SimpleAssignmentTarget::AssignmentTargetIdentifier(
+                        p.ast.alloc(p.ast.identifier_reference(expr.span(), p.ast.atom("__invalid_assign_target__")))
+                    )
+                }
             },
             Expression::TSTypeAssertion(expr) => match expr.expression.get_inner_expression() {
                 Expression::Identifier(_)
@@ -80,12 +102,28 @@ impl<'a> CoverGrammar<'a, Expression<'a>> for SimpleAssignmentTarget<'a> {
                 | Expression::PrivateFieldExpression(_) => {
                     SimpleAssignmentTarget::TSTypeAssertion(expr)
                 }
-                _ => p.fatal_error(diagnostics::invalid_assignment(expr.span())),
+                _ => {
+                    p.error(diagnostics::invalid_assignment(expr.span()));
+                    // Return dummy identifier to allow parsing to continue
+                    SimpleAssignmentTarget::AssignmentTargetIdentifier(
+                        p.ast.alloc(p.ast.identifier_reference(expr.span(), p.ast.atom("__invalid_assign_target__")))
+                    )
+                }
             },
             Expression::TSInstantiationExpression(expr) => {
-                p.fatal_error(diagnostics::invalid_lhs_assignment(expr.span()))
+                p.error(diagnostics::invalid_lhs_assignment(expr.span()));
+                // Return dummy identifier to allow parsing to continue
+                SimpleAssignmentTarget::AssignmentTargetIdentifier(
+                    p.ast.alloc(p.ast.identifier_reference(expr.span(), p.ast.atom("__invalid_assign_target__")))
+                )
             }
-            expr => p.fatal_error(diagnostics::invalid_assignment(expr.span())),
+            expr => {
+                p.error(diagnostics::invalid_assignment(expr.span()));
+                // Return dummy identifier to allow parsing to continue
+                SimpleAssignmentTarget::AssignmentTargetIdentifier(
+                    p.ast.alloc(p.ast.identifier_reference(expr.span(), p.ast.atom("__invalid_assign_target__")))
+                )
+            }
         }
     }
 }
