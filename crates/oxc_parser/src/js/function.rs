@@ -111,6 +111,17 @@ impl<'a> ParserImpl<'a> {
                         comma_span,
                         opening_span,
                     );
+
+                    // Error recovery: decide whether to skip or abort
+                    if self.options.recover_from_errors {
+                        self.error(error);
+                        let decision =
+                            self.synchronize_on_error(crate::context::ParsingContext::Parameters);
+                        match decision {
+                            crate::synchronization::RecoveryDecision::Skip => continue,
+                            crate::synchronization::RecoveryDecision::Abort => break,
+                        }
+                    }
                     self.set_fatal_error(error);
                     break;
                 }
@@ -125,12 +136,23 @@ impl<'a> ParserImpl<'a> {
             }
 
             if let Some(r) = &rest {
-                self.set_fatal_error(diagnostics::rest_parameter_last(
-                    r.type_annotation.as_ref().map_or_else(
+                let error =
+                    diagnostics::rest_parameter_last(r.type_annotation.as_ref().map_or_else(
                         || r.rest.span,
                         |type_annotation| r.rest.span.merge(type_annotation.span()),
-                    ),
-                ));
+                    ));
+
+                // Error recovery: rest parameter must be last
+                if self.options.recover_from_errors {
+                    self.error(error);
+                    let decision =
+                        self.synchronize_on_error(crate::context::ParsingContext::Parameters);
+                    match decision {
+                        crate::synchronization::RecoveryDecision::Skip => continue,
+                        crate::synchronization::RecoveryDecision::Abort => break,
+                    }
+                }
+                self.set_fatal_error(error);
                 break;
             }
 

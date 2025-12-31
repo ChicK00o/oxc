@@ -29,7 +29,6 @@ pub enum RecoveryDecision {
     Abort,
 }
 
-#[expect(dead_code, reason = "M6.5: Will be used in parsing loops shortly")]
 impl ParserImpl<'_> {
     /// Checks if the current token terminates the given parsing context.
     ///
