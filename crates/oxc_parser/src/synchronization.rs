@@ -7,10 +7,29 @@
 //! All functions in this module respect the `recover_from_errors` flag and only
 //! execute when error recovery is enabled.
 
-use crate::{context::ParsingContext, lexer::Kind, ParserImpl};
+use crate::{ParserImpl, context::ParsingContext, lexer::Kind};
 
-// TODO(M6.5): Remove this allow once error recovery is fully integrated in Step 3
-#[expect(dead_code)]
+/// Decision returned by error recovery synchronization.
+///
+/// Determines whether the parser should skip the current token and continue
+/// parsing within the current context, or abort the current context and
+/// return to the parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryDecision {
+    /// Skip the current token and try parsing the next element.
+    ///
+    /// Used when the current token is meaningless in all contexts,
+    /// so we can safely skip it and continue parsing.
+    Skip,
+
+    /// Abort parsing the current context and return to the parent.
+    ///
+    /// Used when the current token is a terminator or is meaningful
+    /// in a parent context, indicating we should exit this context.
+    Abort,
+}
+
+#[expect(dead_code, reason = "M6.5: Will be used in parsing loops shortly")]
 impl ParserImpl<'_> {
     /// Checks if the current token terminates the given parsing context.
     ///
@@ -277,5 +296,48 @@ impl ParserImpl<'_> {
         }
 
         false
+    }
+
+    /// Performs error recovery synchronization by deciding whether to skip or abort.
+    ///
+    /// This is the main entry point for error recovery. It analyzes the current token
+    /// and context to determine the best recovery strategy:
+    ///
+    /// - **Abort**: If the token terminates the current context or belongs to a parent context
+    /// - **Skip**: If the token is meaningless in all contexts
+    ///
+    /// The function also advances the token stream when skipping.
+    ///
+    /// # Parameters
+    ///
+    /// - `ctx`: The current parsing context where the error occurred
+    ///
+    /// # Returns
+    ///
+    /// `RecoveryDecision` indicating whether to skip the token or abort the context.
+    ///
+    /// **Note**: Returns `Abort` when `recover_from_errors` is disabled (safe default).
+    #[inline]
+    pub(crate) fn synchronize_on_error(&mut self, ctx: ParsingContext) -> RecoveryDecision {
+        // Early return if recovery is disabled - always abort to prevent cascading errors
+        if !self.options.recover_from_errors {
+            return RecoveryDecision::Abort;
+        }
+
+        // Decision 1: If current token terminates this context, abort
+        if self.is_context_terminator(ctx) {
+            return RecoveryDecision::Abort;
+        }
+
+        // Decision 2: If current token is meaningful in some parent context, abort
+        // This prevents us from skipping tokens that belong to outer constructs
+        if self.is_in_some_parsing_context() {
+            return RecoveryDecision::Abort;
+        }
+
+        // Decision 3: Token is meaningless everywhere - skip it and continue
+        // Advance the token stream before returning
+        self.bump_any();
+        RecoveryDecision::Skip
     }
 }

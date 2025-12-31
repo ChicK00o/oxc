@@ -195,7 +195,13 @@ impl StatementContext {
 ///   }                 // Pop FunctionBody
 /// }                   // Pop ClassMembers
 /// ```
-#[cfg_attr(not(test), expect(dead_code, reason = "M6.5: TypeAnnotation, TypeParameters, TypeArguments, JsxAttributes, JsxChildren will be used in future steps"))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "M6.5: TypeAnnotation, TypeParameters, TypeArguments, JsxAttributes, JsxChildren will be used in future steps"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParsingContext {
     /// Top-level parsing context (module or script).
@@ -449,7 +455,10 @@ impl ParsingContextStack {
     /// stack.push(ParsingContext::Parameters);
     /// assert_eq!(stack.depth(), 2);
     /// ```
-    #[cfg_attr(not(test), expect(dead_code, reason = "M6.5: Will be used in Step 3 for error recovery"))]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "M6.5: Will be used in Step 3 for error recovery")
+    )]
     #[inline]
     pub(crate) fn depth(&self) -> usize {
         self.contexts.len()
