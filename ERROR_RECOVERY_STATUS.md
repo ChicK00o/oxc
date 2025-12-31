@@ -41,9 +41,9 @@ This document tracks the implementation status of TypeScript Compiler (TSC) styl
 
 **Commits**: `10d3a18d4`, `e9940b54f`
 
-### ⚠️ Step 3: Parsing Loop Integration (20% Complete)
+### ⚠️ Step 3: Parsing Loop Integration (40% Complete)
 
-**Status**: Proof-of-concept implemented, pattern demonstrated
+**Status**: Core contexts implemented, pattern proven effective
 
 **Completed**:
 - ✅ **Parameter Lists** (`parse_formal_parameters_list`):
@@ -52,14 +52,27 @@ This document tracks the implementation status of TypeScript Compiler (TSC) styl
   - Rest parameter not last error
   - Fully functional recovery with Skip/Abort decisions
 
+- ✅ **Statement Lists** (`parse_block`):
+  - Custom loop with BlockStatements context
+  - Invalid token detection and recovery
+  - Skip/Abort synchronization on errors
+  - Validates tokens can start statements
+
+- ✅ **Class Members** (`parse_class_body`):
+  - Custom loop with ClassMembers context
+  - Invalid token detection and recovery
+  - Skip/Abort synchronization on errors
+  - Validates tokens can start class members
+
 **Files Modified**:
 - `crates/oxc_parser/src/js/function.rs` - Parameter list recovery
+- `crates/oxc_parser/src/js/statement.rs` - Statement list recovery
+- `crates/oxc_parser/src/js/class.rs` - Class member recovery
+- `crates/oxc_parser/src/cursor.rs` - Dead code handling
 
-**Commits**: `bdeafa5cc`
+**Commits**: `bdeafa5cc`, `5aaab080e`
 
 **Pending** (requires custom loops or generic function enhancement):
-- ⏳ Statement lists (BlockStatements)
-- ⏳ Class member lists (ClassMembers)
 - ⏳ Type member lists (TypeMembers)
 - ⏳ Switch clauses (SwitchClauses)
 - ⏳ Array literals (ArrayLiteralMembers)
@@ -148,7 +161,9 @@ Generic functions currently check `self.fatal_error.is_some()` to break loops. W
 **Clippy**: ✅ Zero warnings with `-D warnings`
 **Format**: ✅ Passes `cargo fmt`
 
-## Example: Working Recovery
+## Examples: Working Recovery
+
+### Example 1: Parameter Lists
 
 ```typescript
 // Input file with errors:
@@ -168,6 +183,38 @@ function f(a, @ b, , c) { }
 // - Skips missing parameter
 // - Continues to parse c
 // - Reports 2 errors total ✅
+```
+
+### Example 2: Statement Lists
+
+```typescript
+// Input file with errors:
+function test() {
+  let x = 1;
+  @ invalid token
+  let y = 2;
+  % another error
+  let z = 3;
+}
+
+// Without recovery: Stops at first @, reports 1 error
+// With recovery: Reports all 3 errors (@ and % and missing statement), parses all valid statements ✅
+```
+
+### Example 3: Class Members
+
+```typescript
+// Input file with errors:
+class MyClass {
+  validProperty = 1;
+  @ decorator-like-error
+  anotherProperty = 2;
+  % invalid
+  method() {}
+}
+
+// Without recovery: Stops at first @, reports 1 error
+// With recovery: Reports all errors, parses all valid members ✅
 ```
 
 ## Integration Guide
