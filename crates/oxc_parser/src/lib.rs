@@ -96,7 +96,7 @@ use oxc_span::{ModuleKind, SourceType, Span};
 use oxc_syntax::module_record::ModuleRecord;
 
 use crate::{
-    context::{Context, StatementContext},
+    context::{Context, ParsingContextStack, StatementContext},
     error_handler::FatalError,
     lexer::{Lexer, Token},
     module_record::ModuleRecordBuilder,
@@ -393,6 +393,9 @@ struct ParserImpl<'a> {
     /// Parsing context
     ctx: Context,
 
+    /// Context stack for error recovery synchronization
+    context_stack: ParsingContextStack,
+
     /// Ast builder for creating AST nodes
     ast: AstBuilder<'a>,
 
@@ -427,10 +430,30 @@ impl<'a> ParserImpl<'a> {
             prev_token_end: 0,
             state: ParserState::new(),
             ctx: Self::default_context(source_type, options),
+            context_stack: ParsingContextStack::new(),
             ast: AstBuilder::new(allocator),
             module_record_builder: ModuleRecordBuilder::new(allocator),
             is_ts: source_type.is_typescript(),
         }
+    }
+
+    /// Returns the current parsing context from the context stack.
+    ///
+    /// This is used for error recovery synchronization to determine
+    /// the appropriate termination tokens and recovery strategy.
+    #[inline]
+    pub(crate) fn current_context(&self) -> crate::context::ParsingContext {
+        self.context_stack.current()
+    }
+
+    /// Checks if a specific parsing context is currently active in the stack.
+    ///
+    /// This searches the entire context stack, not just the top.
+    /// Useful for checking if we're inside a specific parsing construct
+    /// when making error recovery decisions.
+    #[inline]
+    pub(crate) fn in_context(&self, ctx: crate::context::ParsingContext) -> bool {
+        self.context_stack.is_in_context(ctx)
     }
 
     /// Main entry point
