@@ -48,18 +48,71 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
+
         if self.options.recover_from_errors {
             self.context_stack.push(ParsingContext::EnumMembers);
         }
-        let (members, _) = self.parse_delimited_list(
-            Kind::RCurly,
-            Kind::Comma,
-            opening_span,
-            Self::parse_ts_enum_member,
-        );
+
+        // Custom loop with error recovery for enum members
+        let mut members = self.ast.vec();
+
+        let kind = self.cur_kind();
+        if kind != Kind::RCurly
+            && !matches!(kind, Kind::Eof | Kind::Undetermined)
+            && self.fatal_error.is_none()
+        {
+            members.push(self.parse_ts_enum_member());
+
+            loop {
+                let kind = self.cur_kind();
+
+                // Check termination conditions
+                if kind == Kind::RCurly
+                    || matches!(kind, Kind::Eof | Kind::Undetermined)
+                    || self.fatal_error.is_some()
+                {
+                    break;
+                }
+
+                // Expect comma separator
+                if kind != Kind::Comma {
+                    let error = diagnostics::expect_closing_or_separator(
+                        Kind::RCurly.to_str(),
+                        Kind::Comma.to_str(),
+                        kind.to_str(),
+                        self.cur_token().span(),
+                        opening_span,
+                    );
+
+                    // Error recovery: decide whether to skip or abort
+                    if self.options.recover_from_errors {
+                        self.error(error);
+                        let decision =
+                            self.synchronize_on_error(crate::context::ParsingContext::EnumMembers);
+                        match decision {
+                            crate::synchronization::RecoveryDecision::Skip => continue,
+                            crate::synchronization::RecoveryDecision::Abort => break,
+                        }
+                    }
+                    self.set_fatal_error(error);
+                    break;
+                }
+
+                self.bump(Kind::Comma);
+
+                // Check for trailing comma
+                if self.cur_kind() == Kind::RCurly {
+                    break;
+                }
+
+                members.push(self.parse_ts_enum_member());
+            }
+        }
+
         if self.options.recover_from_errors {
             self.context_stack.pop();
         }
+
         self.expect(Kind::RCurly);
         self.ast.ts_enum_body(self.end_span(span), members)
     }

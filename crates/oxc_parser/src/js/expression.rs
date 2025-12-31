@@ -1086,14 +1086,68 @@ impl<'a> ParserImpl<'a> {
         if self.options.recover_from_errors {
             self.context_stack.push(ParsingContext::ArgumentExpressions);
         }
-        let (call_arguments, _) = self.context(Context::In, Context::Decorator, |p| {
-            p.parse_delimited_list(
-                Kind::RParen,
-                Kind::Comma,
-                opening_span,
-                Self::parse_call_argument,
-            )
-        });
+
+        // Custom loop with error recovery for call arguments
+        let mut call_arguments = self.ast.vec();
+        let saved_ctx = self.ctx;
+        self.ctx = self.ctx.and_in(true).difference(Context::Decorator);
+
+        let kind = self.cur_kind();
+        if kind != Kind::RParen
+            && !matches!(kind, Kind::Eof | Kind::Undetermined)
+            && self.fatal_error.is_none()
+        {
+            call_arguments.push(self.parse_call_argument());
+
+            loop {
+                let kind = self.cur_kind();
+
+                // Check termination conditions
+                if kind == Kind::RParen
+                    || matches!(kind, Kind::Eof | Kind::Undetermined)
+                    || self.fatal_error.is_some()
+                {
+                    break;
+                }
+
+                // Expect comma separator
+                if kind != Kind::Comma {
+                    let error = diagnostics::expect_closing_or_separator(
+                        Kind::RParen.to_str(),
+                        Kind::Comma.to_str(),
+                        kind.to_str(),
+                        self.cur_token().span(),
+                        opening_span,
+                    );
+
+                    // Error recovery: decide whether to skip or abort
+                    if self.options.recover_from_errors {
+                        self.error(error);
+                        let decision = self.synchronize_on_error(
+                            crate::context::ParsingContext::ArgumentExpressions,
+                        );
+                        match decision {
+                            crate::synchronization::RecoveryDecision::Skip => continue,
+                            crate::synchronization::RecoveryDecision::Abort => break,
+                        }
+                    }
+                    self.set_fatal_error(error);
+                    break;
+                }
+
+                self.bump(Kind::Comma);
+
+                // Check for trailing comma
+                if self.cur_kind() == Kind::RParen {
+                    break;
+                }
+
+                call_arguments.push(self.parse_call_argument());
+            }
+        }
+
+        self.ctx = saved_ctx;
+
         if self.options.recover_from_errors {
             self.context_stack.pop();
         }
