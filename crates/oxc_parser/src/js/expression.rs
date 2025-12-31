@@ -17,7 +17,9 @@ use super::{
     },
 };
 use crate::{
-    Context, ParserImpl, diagnostics,
+    Context, ParserImpl,
+    context::ParsingContext,
+    diagnostics,
     lexer::{Kind, parse_big_int, parse_float, parse_int},
     modifiers::Modifiers,
 };
@@ -1015,6 +1017,8 @@ impl<'a> ParserImpl<'a> {
         //   AssignmentExpression[+In, ?Yield, ?Await]
         let opening_span = self.cur_token().span();
         self.expect(Kind::LParen);
+
+        self.context_stack.push(ParsingContext::ArgumentExpressions);
         let (call_arguments, _) = self.context(Context::In, Context::Decorator, |p| {
             p.parse_delimited_list(
                 Kind::RParen,
@@ -1023,6 +1027,8 @@ impl<'a> ParserImpl<'a> {
                 Self::parse_call_argument,
             )
         });
+        self.context_stack.pop();
+
         self.expect(Kind::RParen);
         self.ast.expression_call(
             self.end_span(lhs_span),

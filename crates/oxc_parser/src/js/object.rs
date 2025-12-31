@@ -3,7 +3,9 @@ use oxc_ast::ast::*;
 use oxc_syntax::operator::AssignmentOperator;
 
 use crate::{
-    Context, ParserImpl, diagnostics,
+    Context, ParserImpl,
+    context::ParsingContext,
+    diagnostics,
     lexer::Kind,
     modifiers::{ModifierFlags, Modifiers},
 };
@@ -20,6 +22,8 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
+
+        self.context_stack.push(ParsingContext::ObjectLiteralMembers);
         let (object_expression_properties, comma_span) = self.context_add(Context::In, |p| {
             p.parse_delimited_list(
                 Kind::RCurly,
@@ -28,6 +32,8 @@ impl<'a> ParserImpl<'a> {
                 Self::parse_object_expression_property,
             )
         });
+        self.context_stack.pop();
+
         if let Some(comma_span) = comma_span {
             self.state.trailing_commas.insert(span, self.end_span(comma_span));
         }

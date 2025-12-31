@@ -4,7 +4,9 @@ use oxc_ecmascript::PropName;
 use oxc_span::{GetSpan, Span};
 
 use crate::{
-    Context, ParserImpl, StatementContext, diagnostics,
+    Context, ParserImpl, StatementContext,
+    context::ParsingContext,
+    diagnostics,
     lexer::Kind,
     modifiers::{ModifierFlags, ModifierKind, Modifiers},
 };
@@ -193,6 +195,7 @@ impl<'a> ParserImpl<'a> {
 
     fn parse_class_body(&mut self) -> Box<'a, ClassBody<'a>> {
         let span = self.start_span();
+        self.context_stack.push(ParsingContext::ClassMembers);
         let class_elements = self.parse_normal_list_breakable(Kind::LCurly, Kind::RCurly, |p| {
             // Skip empty class element `;`
             if p.eat(Kind::Semicolon) {
@@ -203,6 +206,7 @@ impl<'a> ParserImpl<'a> {
             }
             Some(Self::parse_class_element(p))
         });
+        self.context_stack.pop();
         self.ast.alloc_class_body(self.end_span(span), class_elements)
     }
 

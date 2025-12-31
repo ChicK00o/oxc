@@ -4,7 +4,9 @@ use oxc_span::{Atom, GetSpan, Span};
 
 use super::{VariableDeclarationParent, grammar::CoverGrammar};
 use crate::{
-    Context, ParserImpl, StatementContext, diagnostics,
+    Context, ParserImpl, StatementContext,
+    context::ParsingContext,
+    diagnostics,
     lexer::Kind,
     modifiers::{Modifier, ModifierFlags, ModifierKind, Modifiers},
 };
@@ -207,9 +209,11 @@ impl<'a> ParserImpl<'a> {
     /// Section 14.2 Block Statement
     pub(crate) fn parse_block(&mut self) -> Box<'a, BlockStatement<'a>> {
         let span = self.start_span();
+        self.context_stack.push(ParsingContext::BlockStatements);
         let body = self.parse_normal_list(Kind::LCurly, Kind::RCurly, |p| {
             p.parse_statement_list_item(StatementContext::StatementList)
         });
+        self.context_stack.pop();
         self.ast.alloc_block_statement(self.end_span(span), body)
     }
 
