@@ -195,22 +195,59 @@ impl<'a> ParserImpl<'a> {
 
     fn parse_class_body(&mut self) -> Box<'a, ClassBody<'a>> {
         let span = self.start_span();
+        let opening_span = self.cur_token().span();
+        self.expect(Kind::LCurly);
+
         if self.options.recover_from_errors {
             self.context_stack.push(ParsingContext::ClassMembers);
         }
-        let class_elements = self.parse_normal_list_breakable(Kind::LCurly, Kind::RCurly, |p| {
+
+        // Custom loop with error recovery for class members
+        let mut class_elements = self.ast.vec();
+        loop {
+            // Check termination conditions
+            if self.at(Kind::RCurly) || self.has_fatal_error() {
+                break;
+            }
+
             // Skip empty class element `;`
-            if p.eat(Kind::Semicolon) {
-                while p.eat(Kind::Semicolon) {}
-                if p.at(Kind::RCurly) {
-                    return None;
+            if self.eat(Kind::Semicolon) {
+                while self.eat(Kind::Semicolon) {}
+                if self.at(Kind::RCurly) {
+                    break;
                 }
             }
-            Some(Self::parse_class_element(p))
-        });
+
+            // Check if we can start a class member here (for error recovery)
+            if self.options.recover_from_errors
+                && !self
+                    .is_context_element_start(crate::context::ParsingContext::ClassMembers, false)
+            {
+                // Not a valid class member start - report error and synchronize
+                let error = diagnostics::expect_token(
+                    "class member",
+                    self.cur_kind().to_str(),
+                    self.cur_token().span(),
+                );
+                self.error(error);
+
+                let decision =
+                    self.synchronize_on_error(crate::context::ParsingContext::ClassMembers);
+                match decision {
+                    crate::synchronization::RecoveryDecision::Skip => continue,
+                    crate::synchronization::RecoveryDecision::Abort => break,
+                }
+            }
+
+            // Parse class element
+            class_elements.push(Self::parse_class_element(self));
+        }
+
         if self.options.recover_from_errors {
             self.context_stack.pop();
         }
+
+        self.expect_closing(Kind::RCurly, opening_span);
         self.ast.alloc_class_body(self.end_span(span), class_elements)
     }
 

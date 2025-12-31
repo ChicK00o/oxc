@@ -414,6 +414,9 @@ impl<'a> ParserImpl<'a> {
         list
     }
 
+    /// M6.5: Replaced with custom loops for error recovery in statement lists and class members.
+    /// This function may be useful for other contexts in the future, so keeping it available.
+    #[expect(dead_code)]
     pub(crate) fn parse_normal_list_breakable<F, T>(
         &mut self,
         open: Kind,

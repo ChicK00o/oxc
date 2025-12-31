@@ -209,15 +209,58 @@ impl<'a> ParserImpl<'a> {
     /// Section 14.2 Block Statement
     pub(crate) fn parse_block(&mut self) -> Box<'a, BlockStatement<'a>> {
         let span = self.start_span();
+        let opening_span = self.cur_token().span();
+        self.expect(Kind::LCurly);
+
         if self.options.recover_from_errors {
             self.context_stack.push(ParsingContext::BlockStatements);
         }
-        let body = self.parse_normal_list(Kind::LCurly, Kind::RCurly, |p| {
-            p.parse_statement_list_item(StatementContext::StatementList)
-        });
+
+        // Custom loop with error recovery for statement lists
+        let mut body = self.ast.vec();
+        loop {
+            let kind = self.cur_kind();
+
+            // Check termination conditions
+            if kind == Kind::RCurly
+                || matches!(kind, Kind::Eof | Kind::Undetermined)
+                || self.fatal_error.is_some()
+            {
+                break;
+            }
+
+            // Check if we can start a statement here (for error recovery)
+            if self.options.recover_from_errors
+                && !self.is_context_element_start(
+                    crate::context::ParsingContext::BlockStatements,
+                    false,
+                )
+            {
+                // Not a valid statement start - report error and synchronize
+                let error = diagnostics::expect_token(
+                    "statement",
+                    self.cur_kind().to_str(),
+                    self.cur_token().span(),
+                );
+                self.error(error);
+
+                let decision =
+                    self.synchronize_on_error(crate::context::ParsingContext::BlockStatements);
+                match decision {
+                    crate::synchronization::RecoveryDecision::Skip => continue,
+                    crate::synchronization::RecoveryDecision::Abort => break,
+                }
+            }
+
+            // Parse statement
+            body.push(self.parse_statement_list_item(StatementContext::StatementList));
+        }
+
         if self.options.recover_from_errors {
             self.context_stack.pop();
         }
+
+        self.expect_closing(Kind::RCurly, opening_span);
         self.ast.alloc_block_statement(self.end_span(span), body)
     }
 
