@@ -209,11 +209,15 @@ impl<'a> ParserImpl<'a> {
     /// Section 14.2 Block Statement
     pub(crate) fn parse_block(&mut self) -> Box<'a, BlockStatement<'a>> {
         let span = self.start_span();
-        self.context_stack.push(ParsingContext::BlockStatements);
+        if self.options.recover_from_errors {
+            self.context_stack.push(ParsingContext::BlockStatements);
+        }
         let body = self.parse_normal_list(Kind::LCurly, Kind::RCurly, |p| {
             p.parse_statement_list_item(StatementContext::StatementList)
         });
-        self.context_stack.pop();
+        if self.options.recover_from_errors {
+            self.context_stack.pop();
+        }
         self.ast.alloc_block_statement(self.end_span(span), body)
     }
 
@@ -632,9 +636,13 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         self.bump_any(); // advance `switch`
         let discriminant = self.parse_paren_expression();
-        self.context_stack.push(ParsingContext::SwitchClauses);
+        if self.options.recover_from_errors {
+            self.context_stack.push(ParsingContext::SwitchClauses);
+        }
         let cases = self.parse_normal_list(Kind::LCurly, Kind::RCurly, Self::parse_switch_case);
-        self.context_stack.pop();
+        if self.options.recover_from_errors {
+            self.context_stack.pop();
+        }
         self.ast.statement_switch(self.end_span(span), discriminant, cases)
     }
 

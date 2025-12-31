@@ -457,7 +457,9 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         let opening_span = self.cur_token().span();
         self.expect(Kind::LBrack);
-        self.context_stack.push(ParsingContext::ArrayLiteralMembers);
+        if self.options.recover_from_errors {
+            self.context_stack.push(ParsingContext::ArrayLiteralMembers);
+        }
         let (elements, comma_span) = self.context_add(Context::In, |p| {
             p.parse_delimited_list(
                 Kind::RBrack,
@@ -469,7 +471,9 @@ impl<'a> ParserImpl<'a> {
         if let Some(comma_span) = comma_span {
             self.state.trailing_commas.insert(span, self.end_span(comma_span));
         }
-        self.context_stack.pop();
+        if self.options.recover_from_errors {
+            self.context_stack.pop();
+        }
         self.expect(Kind::RBrack);
         self.ast.expression_array(self.end_span(span), elements)
     }
@@ -1020,7 +1024,9 @@ impl<'a> ParserImpl<'a> {
         let opening_span = self.cur_token().span();
         self.expect(Kind::LParen);
 
-        self.context_stack.push(ParsingContext::ArgumentExpressions);
+        if self.options.recover_from_errors {
+            self.context_stack.push(ParsingContext::ArgumentExpressions);
+        }
         let (call_arguments, _) = self.context(Context::In, Context::Decorator, |p| {
             p.parse_delimited_list(
                 Kind::RParen,
@@ -1029,7 +1035,9 @@ impl<'a> ParserImpl<'a> {
                 Self::parse_call_argument,
             )
         });
-        self.context_stack.pop();
+        if self.options.recover_from_errors {
+            self.context_stack.pop();
+        }
 
         self.expect(Kind::RParen);
         self.ast.expression_call(

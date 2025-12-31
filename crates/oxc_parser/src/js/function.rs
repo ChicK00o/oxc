@@ -35,11 +35,15 @@ impl<'a> ParserImpl<'a> {
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
 
-        self.context_stack.push(ParsingContext::FunctionBody);
+        if self.options.recover_from_errors {
+            self.context_stack.push(ParsingContext::FunctionBody);
+        }
         let (directives, statements) = self.context_add(Context::Return, |p| {
             p.parse_directives_and_statements(/* is_top_level */ false)
         });
-        self.context_stack.pop();
+        if self.options.recover_from_errors {
+            self.context_stack.pop();
+        }
 
         self.expect_closing(Kind::RCurly, opening_span);
         self.ast.alloc_function_body(self.end_span(span), directives, statements)
@@ -54,7 +58,9 @@ impl<'a> ParserImpl<'a> {
         let opening_span = self.cur_token().span();
         self.expect(Kind::LParen);
 
-        self.context_stack.push(ParsingContext::Parameters);
+        if self.options.recover_from_errors {
+            self.context_stack.push(ParsingContext::Parameters);
+        }
         let this_param = if self.is_ts && self.at(Kind::This) {
             let param = self.parse_ts_this_parameter();
             self.bump(Kind::Comma);
@@ -63,7 +69,9 @@ impl<'a> ParserImpl<'a> {
             None
         };
         let (list, rest) = self.parse_formal_parameters_list(func_kind, opening_span);
-        self.context_stack.pop();
+        if self.options.recover_from_errors {
+            self.context_stack.pop();
+        }
 
         self.expect(Kind::RParen);
 

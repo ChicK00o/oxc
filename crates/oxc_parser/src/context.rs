@@ -195,6 +195,7 @@ impl StatementContext {
 ///   }                 // Pop FunctionBody
 /// }                   // Pop ClassMembers
 /// ```
+#[cfg_attr(not(test), expect(dead_code, reason = "M6.5: TypeAnnotation, TypeParameters, TypeArguments, JsxAttributes, JsxChildren will be used in future steps"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParsingContext {
     /// Top-level parsing context (module or script).
@@ -387,7 +388,7 @@ impl ParsingContextStack {
     /// assert_eq!(stack.current(), ParsingContext::Parameters);
     /// ```
     #[inline]
-    pub fn current(&self) -> ParsingContext {
+    pub(crate) fn current(&self) -> ParsingContext {
         *self.contexts.last().expect("Context stack should never be empty")
     }
 
@@ -415,7 +416,7 @@ impl ParsingContextStack {
     /// assert!(!stack.is_in_context(ParsingContext::Parameters));
     /// ```
     #[inline]
-    pub fn is_in_context(&self, ctx: ParsingContext) -> bool {
+    pub(crate) fn is_in_context(&self, ctx: ParsingContext) -> bool {
         self.contexts.contains(&ctx)
     }
 
@@ -431,7 +432,7 @@ impl ParsingContextStack {
     /// assert_eq!(contexts[contexts.len() - 1], stack.current());
     /// ```
     #[inline]
-    pub fn active_contexts(&self) -> &[ParsingContext] {
+    pub(crate) fn active_contexts(&self) -> &[ParsingContext] {
         &self.contexts
     }
 
@@ -448,8 +449,9 @@ impl ParsingContextStack {
     /// stack.push(ParsingContext::Parameters);
     /// assert_eq!(stack.depth(), 2);
     /// ```
+    #[cfg_attr(not(test), expect(dead_code, reason = "M6.5: Will be used in Step 3 for error recovery"))]
     #[inline]
-    pub fn depth(&self) -> usize {
+    pub(crate) fn depth(&self) -> usize {
         self.contexts.len()
     }
 }

@@ -72,6 +72,7 @@ mod error_handler;
 mod modifiers;
 mod module_record;
 mod state;
+mod synchronization;
 
 mod js;
 mod jsx;
@@ -441,6 +442,7 @@ impl<'a> ParserImpl<'a> {
     ///
     /// This is used for error recovery synchronization to determine
     /// the appropriate termination tokens and recovery strategy.
+    #[expect(dead_code, reason = "M6.5: Will be used in Step 3 for error recovery")]
     #[inline]
     pub(crate) fn current_context(&self) -> crate::context::ParsingContext {
         self.context_stack.current()
@@ -451,6 +453,7 @@ impl<'a> ParserImpl<'a> {
     /// This searches the entire context stack, not just the top.
     /// Useful for checking if we're inside a specific parsing construct
     /// when making error recovery decisions.
+    #[expect(dead_code, reason = "M6.5: Will be used in Step 3 for error recovery")]
     #[inline]
     pub(crate) fn in_context(&self, ctx: crate::context::ParsingContext) -> bool {
         self.context_stack.is_in_context(ctx)

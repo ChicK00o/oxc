@@ -23,7 +23,9 @@ impl<'a> ParserImpl<'a> {
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
 
-        self.context_stack.push(ParsingContext::ObjectLiteralMembers);
+        if self.options.recover_from_errors {
+            self.context_stack.push(ParsingContext::ObjectLiteralMembers);
+        }
         let (object_expression_properties, comma_span) = self.context_add(Context::In, |p| {
             p.parse_delimited_list(
                 Kind::RCurly,
@@ -32,7 +34,9 @@ impl<'a> ParserImpl<'a> {
                 Self::parse_object_expression_property,
             )
         });
-        self.context_stack.pop();
+        if self.options.recover_from_errors {
+            self.context_stack.pop();
+        }
 
         if let Some(comma_span) = comma_span {
             self.state.trailing_commas.insert(span, self.end_span(comma_span));
