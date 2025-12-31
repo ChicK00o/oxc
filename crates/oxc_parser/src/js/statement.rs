@@ -632,7 +632,9 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         self.bump_any(); // advance `switch`
         let discriminant = self.parse_paren_expression();
+        self.context_stack.push(ParsingContext::SwitchClauses);
         let cases = self.parse_normal_list(Kind::LCurly, Kind::RCurly, Self::parse_switch_case);
+        self.context_stack.pop();
         self.ast.statement_switch(self.end_span(span), discriminant, cases)
     }
 

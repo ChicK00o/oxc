@@ -5,7 +5,9 @@ use rustc_hash::FxHashMap;
 
 use super::FunctionKind;
 use crate::{
-    ParserImpl, StatementContext, diagnostics,
+    ParserImpl, StatementContext,
+    context::ParsingContext,
+    diagnostics,
     lexer::Kind,
     modifiers::{Modifier, ModifierFlags, ModifierKind, Modifiers},
 };
@@ -321,11 +323,13 @@ impl<'a> ParserImpl<'a> {
     ) -> Vec<'a, ImportDeclarationSpecifier<'a>> {
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
+        self.context_stack.push(ParsingContext::ImportSpecifiers);
         let (list, _) = self.context_remove(self.ctx, |p| {
             p.parse_delimited_list(Kind::RCurly, Kind::Comma, opening_span, |parser| {
                 parser.parse_import_specifier(import_kind)
             })
         });
+        self.context_stack.pop();
         self.expect(Kind::RCurly);
         list
     }
@@ -530,11 +534,13 @@ impl<'a> ParserImpl<'a> {
         let export_kind = self.parse_import_or_export_kind();
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
+        self.context_stack.push(ParsingContext::ExportSpecifiers);
         let (mut specifiers, _) = self.context_remove(self.ctx, |p| {
             p.parse_delimited_list(Kind::RCurly, Kind::Comma, opening_span, |parser| {
                 parser.parse_export_specifier(export_kind)
             })
         });
+        self.context_stack.pop();
         self.expect(Kind::RCurly);
         let (source, with_clause) = if self.eat(Kind::From) && self.cur_kind().is_literal() {
             let source = self.parse_literal_string();

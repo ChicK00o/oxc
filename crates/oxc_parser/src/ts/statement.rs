@@ -3,7 +3,9 @@ use oxc_ast::ast::*;
 use oxc_span::GetSpan;
 
 use crate::{
-    ParserImpl, diagnostics,
+    ParserImpl,
+    context::ParsingContext,
+    diagnostics,
     js::{FunctionKind, VariableDeclarationParent},
     lexer::Kind,
     modifiers::{ModifierFlags, ModifierKind, Modifiers},
@@ -46,12 +48,14 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
+        self.context_stack.push(ParsingContext::EnumMembers);
         let (members, _) = self.parse_delimited_list(
             Kind::RCurly,
             Kind::Comma,
             opening_span,
             Self::parse_ts_enum_member,
         );
+        self.context_stack.pop();
         self.expect(Kind::RCurly);
         self.ast.ts_enum_body(self.end_span(span), members)
     }
@@ -219,8 +223,10 @@ impl<'a> ParserImpl<'a> {
 
     fn parse_ts_interface_body(&mut self) -> Box<'a, TSInterfaceBody<'a>> {
         let span = self.start_span();
+        self.context_stack.push(ParsingContext::TypeMembers);
         let body_list =
             self.parse_normal_list(Kind::LCurly, Kind::RCurly, Self::parse_ts_type_signature);
+        self.context_stack.pop();
         self.ast.alloc_ts_interface_body(self.end_span(span), body_list)
     }
 

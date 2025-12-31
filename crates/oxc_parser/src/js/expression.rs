@@ -457,6 +457,7 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         let opening_span = self.cur_token().span();
         self.expect(Kind::LBrack);
+        self.context_stack.push(ParsingContext::ArrayLiteralMembers);
         let (elements, comma_span) = self.context_add(Context::In, |p| {
             p.parse_delimited_list(
                 Kind::RBrack,
@@ -468,6 +469,7 @@ impl<'a> ParserImpl<'a> {
         if let Some(comma_span) = comma_span {
             self.state.trailing_commas.insert(span, self.end_span(comma_span));
         }
+        self.context_stack.pop();
         self.expect(Kind::RBrack);
         self.ast.expression_array(self.end_span(span), elements)
     }

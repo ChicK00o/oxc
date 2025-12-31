@@ -4,7 +4,9 @@ use oxc_span::GetSpan;
 use oxc_syntax::operator::UnaryOperator;
 
 use crate::{
-    Context, ParserImpl, diagnostics,
+    Context, ParserImpl,
+    context::ParsingContext,
+    diagnostics,
     lexer::Kind,
     modifiers::{ModifierFlags, ModifierKind, Modifiers},
 };
@@ -654,8 +656,10 @@ impl<'a> ParserImpl<'a> {
 
     fn parse_type_literal(&mut self) -> TSType<'a> {
         let span = self.start_span();
+        self.context_stack.push(ParsingContext::TypeMembers);
         let member_list =
             self.parse_normal_list(Kind::LCurly, Kind::RCurly, Self::parse_ts_type_signature);
+        self.context_stack.pop();
         self.ast.ts_type_type_literal(self.end_span(span), member_list)
     }
 
