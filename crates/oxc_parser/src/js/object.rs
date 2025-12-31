@@ -26,21 +26,78 @@ impl<'a> ParserImpl<'a> {
         if self.options.recover_from_errors {
             self.context_stack.push(ParsingContext::ObjectLiteralMembers);
         }
-        let (object_expression_properties, comma_span) = self.context_add(Context::In, |p| {
-            p.parse_delimited_list(
-                Kind::RCurly,
-                Kind::Comma,
-                opening_span,
-                Self::parse_object_expression_property,
-            )
-        });
+
+        // Custom loop with error recovery for object properties
+        let mut object_expression_properties = self.ast.vec();
+        let mut comma_span = None;
+
+        self.ctx = self.ctx.and_in(true);
+
+        let kind = self.cur_kind();
+        if kind != Kind::RCurly
+            && !matches!(kind, Kind::Eof | Kind::Undetermined)
+            && self.fatal_error.is_none()
+        {
+            object_expression_properties.push(self.parse_object_expression_property());
+
+            loop {
+                let kind = self.cur_kind();
+
+                // Check termination conditions
+                if kind == Kind::RCurly
+                    || matches!(kind, Kind::Eof | Kind::Undetermined)
+                    || self.fatal_error.is_some()
+                {
+                    break;
+                }
+
+                // Expect comma separator
+                if kind != Kind::Comma {
+                    let error = diagnostics::expect_closing_or_separator(
+                        Kind::RCurly.to_str(),
+                        Kind::Comma.to_str(),
+                        kind.to_str(),
+                        self.cur_token().span(),
+                        opening_span,
+                    );
+
+                    // Error recovery: decide whether to skip or abort
+                    if self.options.recover_from_errors {
+                        self.error(error);
+                        let decision = self.synchronize_on_error(
+                            crate::context::ParsingContext::ObjectLiteralMembers,
+                        );
+                        match decision {
+                            crate::synchronization::RecoveryDecision::Skip => continue,
+                            crate::synchronization::RecoveryDecision::Abort => break,
+                        }
+                    }
+                    self.set_fatal_error(error);
+                    break;
+                }
+
+                self.bump(Kind::Comma);
+
+                // Check for trailing comma
+                if self.cur_kind() == Kind::RCurly {
+                    comma_span = Some(self.prev_token_end - 1);
+                    break;
+                }
+
+                object_expression_properties.push(self.parse_object_expression_property());
+            }
+        }
+
+        self.ctx = self.ctx.and_in(false);
+
         if self.options.recover_from_errors {
             self.context_stack.pop();
         }
 
-        if let Some(comma_span) = comma_span {
-            self.state.trailing_commas.insert(span, self.end_span(comma_span));
+        if let Some(comma_span_val) = comma_span {
+            self.state.trailing_commas.insert(span, self.end_span(comma_span_val));
         }
+
         self.expect(Kind::RCurly);
         self.ast.alloc_object_expression(self.end_span(span), object_expression_properties)
     }

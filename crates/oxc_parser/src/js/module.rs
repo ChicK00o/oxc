@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 
 use super::FunctionKind;
 use crate::{
-    ParserImpl, StatementContext,
+    Context, ParserImpl, StatementContext,
     context::ParsingContext,
     diagnostics,
     lexer::Kind,
@@ -323,17 +323,75 @@ impl<'a> ParserImpl<'a> {
     ) -> Vec<'a, ImportDeclarationSpecifier<'a>> {
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
+
         if self.options.recover_from_errors {
             self.context_stack.push(ParsingContext::ImportSpecifiers);
         }
-        let (list, _) = self.context_remove(self.ctx, |p| {
-            p.parse_delimited_list(Kind::RCurly, Kind::Comma, opening_span, |parser| {
-                parser.parse_import_specifier(import_kind)
-            })
-        });
+
+        // Custom loop with error recovery for import specifiers
+        let mut list = self.ast.vec();
+        let saved_ctx = self.ctx;
+        self.ctx = Context::empty();
+
+        let kind = self.cur_kind();
+        if kind != Kind::RCurly
+            && !matches!(kind, Kind::Eof | Kind::Undetermined)
+            && self.fatal_error.is_none()
+        {
+            list.push(self.parse_import_specifier(import_kind));
+
+            loop {
+                let kind = self.cur_kind();
+
+                // Check termination conditions
+                if kind == Kind::RCurly
+                    || matches!(kind, Kind::Eof | Kind::Undetermined)
+                    || self.fatal_error.is_some()
+                {
+                    break;
+                }
+
+                // Expect comma separator
+                if kind != Kind::Comma {
+                    let error = diagnostics::expect_closing_or_separator(
+                        Kind::RCurly.to_str(),
+                        Kind::Comma.to_str(),
+                        kind.to_str(),
+                        self.cur_token().span(),
+                        opening_span,
+                    );
+
+                    // Error recovery: decide whether to skip or abort
+                    if self.options.recover_from_errors {
+                        self.error(error);
+                        let decision = self
+                            .synchronize_on_error(crate::context::ParsingContext::ImportSpecifiers);
+                        match decision {
+                            crate::synchronization::RecoveryDecision::Skip => continue,
+                            crate::synchronization::RecoveryDecision::Abort => break,
+                        }
+                    }
+                    self.set_fatal_error(error);
+                    break;
+                }
+
+                self.bump(Kind::Comma);
+
+                // Check for trailing comma
+                if self.cur_kind() == Kind::RCurly {
+                    break;
+                }
+
+                list.push(self.parse_import_specifier(import_kind));
+            }
+        }
+
+        self.ctx = saved_ctx;
+
         if self.options.recover_from_errors {
             self.context_stack.pop();
         }
+
         self.expect(Kind::RCurly);
         list
     }
@@ -538,17 +596,75 @@ impl<'a> ParserImpl<'a> {
         let export_kind = self.parse_import_or_export_kind();
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
+
         if self.options.recover_from_errors {
             self.context_stack.push(ParsingContext::ExportSpecifiers);
         }
-        let (mut specifiers, _) = self.context_remove(self.ctx, |p| {
-            p.parse_delimited_list(Kind::RCurly, Kind::Comma, opening_span, |parser| {
-                parser.parse_export_specifier(export_kind)
-            })
-        });
+
+        // Custom loop with error recovery for export specifiers
+        let mut specifiers = self.ast.vec();
+        let saved_ctx = self.ctx;
+        self.ctx = Context::empty();
+
+        let kind = self.cur_kind();
+        if kind != Kind::RCurly
+            && !matches!(kind, Kind::Eof | Kind::Undetermined)
+            && self.fatal_error.is_none()
+        {
+            specifiers.push(self.parse_export_specifier(export_kind));
+
+            loop {
+                let kind = self.cur_kind();
+
+                // Check termination conditions
+                if kind == Kind::RCurly
+                    || matches!(kind, Kind::Eof | Kind::Undetermined)
+                    || self.fatal_error.is_some()
+                {
+                    break;
+                }
+
+                // Expect comma separator
+                if kind != Kind::Comma {
+                    let error = diagnostics::expect_closing_or_separator(
+                        Kind::RCurly.to_str(),
+                        Kind::Comma.to_str(),
+                        kind.to_str(),
+                        self.cur_token().span(),
+                        opening_span,
+                    );
+
+                    // Error recovery: decide whether to skip or abort
+                    if self.options.recover_from_errors {
+                        self.error(error);
+                        let decision = self
+                            .synchronize_on_error(crate::context::ParsingContext::ExportSpecifiers);
+                        match decision {
+                            crate::synchronization::RecoveryDecision::Skip => continue,
+                            crate::synchronization::RecoveryDecision::Abort => break,
+                        }
+                    }
+                    self.set_fatal_error(error);
+                    break;
+                }
+
+                self.bump(Kind::Comma);
+
+                // Check for trailing comma
+                if self.cur_kind() == Kind::RCurly {
+                    break;
+                }
+
+                specifiers.push(self.parse_export_specifier(export_kind));
+            }
+        }
+
+        self.ctx = saved_ctx;
+
         if self.options.recover_from_errors {
             self.context_stack.pop();
         }
+
         self.expect(Kind::RCurly);
         let (source, with_clause) = if self.eat(Kind::From) && self.cur_kind().is_literal() {
             let source = self.parse_literal_string();

@@ -679,13 +679,57 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         self.bump_any(); // advance `switch`
         let discriminant = self.parse_paren_expression();
+
+        // Custom loop with error recovery for switch clauses
+        let opening_span = self.cur_token().span();
+        self.expect(Kind::LCurly);
+
         if self.options.recover_from_errors {
             self.context_stack.push(ParsingContext::SwitchClauses);
         }
-        let cases = self.parse_normal_list(Kind::LCurly, Kind::RCurly, Self::parse_switch_case);
+
+        let mut cases = self.ast.vec();
+        loop {
+            let kind = self.cur_kind();
+
+            // Check termination conditions
+            if kind == Kind::RCurly
+                || matches!(kind, Kind::Eof | Kind::Undetermined)
+                || self.fatal_error.is_some()
+            {
+                break;
+            }
+
+            // Check if we can start a switch clause here (for error recovery)
+            if self.options.recover_from_errors
+                && !self
+                    .is_context_element_start(crate::context::ParsingContext::SwitchClauses, false)
+            {
+                // Not a valid switch clause start - report error and synchronize
+                let error = diagnostics::expect_token(
+                    "case or default",
+                    self.cur_kind().to_str(),
+                    self.cur_token().span(),
+                );
+                self.error(error);
+
+                let decision =
+                    self.synchronize_on_error(crate::context::ParsingContext::SwitchClauses);
+                match decision {
+                    crate::synchronization::RecoveryDecision::Skip => continue,
+                    crate::synchronization::RecoveryDecision::Abort => break,
+                }
+            }
+
+            // Parse switch case
+            cases.push(Self::parse_switch_case(self));
+        }
+
         if self.options.recover_from_errors {
             self.context_stack.pop();
         }
+
+        self.expect_closing(Kind::RCurly, opening_span);
         self.ast.statement_switch(self.end_span(span), discriminant, cases)
     }
 

@@ -393,6 +393,9 @@ impl<'a> ParserImpl<'a> {
         result
     }
 
+    /// M6.5: Replaced with custom loops for error recovery in multiple contexts.
+    /// This function may be useful for other contexts in the future, so keeping it available.
+    #[expect(dead_code)]
     pub(crate) fn parse_normal_list<F, T>(&mut self, open: Kind, close: Kind, f: F) -> Vec<'a, T>
     where
         F: Fn(&mut Self) -> T,

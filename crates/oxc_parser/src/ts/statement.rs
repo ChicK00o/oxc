@@ -227,14 +227,64 @@ impl<'a> ParserImpl<'a> {
 
     fn parse_ts_interface_body(&mut self) -> Box<'a, TSInterfaceBody<'a>> {
         let span = self.start_span();
+        let opening_span = self.cur_token().span();
+        self.expect(Kind::LCurly);
+
         if self.options.recover_from_errors {
             self.context_stack.push(ParsingContext::TypeMembers);
         }
-        let body_list =
-            self.parse_normal_list(Kind::LCurly, Kind::RCurly, Self::parse_ts_type_signature);
+
+        // Custom loop with error recovery for type members
+        let mut body_list = self.ast.vec();
+        loop {
+            let kind = self.cur_kind();
+
+            // Check termination conditions
+            if kind == Kind::RCurly
+                || matches!(kind, Kind::Eof | Kind::Undetermined)
+                || self.fatal_error.is_some()
+            {
+                break;
+            }
+
+            // Skip semicolons (member separators)
+            if self.eat(Kind::Semicolon) {
+                while self.eat(Kind::Semicolon) {}
+                if self.at(Kind::RCurly) {
+                    break;
+                }
+            }
+
+            // Check if we can start a type member here (for error recovery)
+            if self.options.recover_from_errors
+                && !self
+                    .is_context_element_start(crate::context::ParsingContext::TypeMembers, false)
+            {
+                // Not a valid type member start - report error and synchronize
+                let error = diagnostics::expect_token(
+                    "type member",
+                    self.cur_kind().to_str(),
+                    self.cur_token().span(),
+                );
+                self.error(error);
+
+                let decision =
+                    self.synchronize_on_error(crate::context::ParsingContext::TypeMembers);
+                match decision {
+                    crate::synchronization::RecoveryDecision::Skip => continue,
+                    crate::synchronization::RecoveryDecision::Abort => break,
+                }
+            }
+
+            // Parse type member
+            body_list.push(Self::parse_ts_type_signature(self));
+        }
+
         if self.options.recover_from_errors {
             self.context_stack.pop();
         }
+
+        self.expect_closing(Kind::RCurly, opening_span);
         self.ast.alloc_ts_interface_body(self.end_span(span), body_list)
     }
 
