@@ -1323,10 +1323,10 @@ impl<'a> ParserImpl<'a> {
         } else {
             // Error recovery: create dummy 'any' type for missing annotation
             if self.options.recover_from_errors {
-                self.error(diagnostics::index_signature_type_annotation(self.end_span(span)));
-                // Create dummy 'any' type
-                let any_span = self.cur_token().span();
-                self.ast.alloc_ts_type_annotation(any_span, self.ast.ts_type_any_keyword(any_span))
+                let error_span = self.end_span(span);
+                self.error(diagnostics::index_signature_type_annotation(error_span));
+                // Use helper to create dummy 'any' type
+                self.create_dummy_any_type(self.cur_token().span())
             } else {
                 return self.fatal_error(diagnostics::index_signature_type_annotation(
                     self.end_span(span),
@@ -1431,5 +1431,44 @@ impl<'a> ParserImpl<'a> {
             }
             _ => false,
         }
+    }
+
+    /// Create a dummy 'any' type annotation for error recovery.
+    ///
+    /// Used when a type annotation is required but missing, allowing parsing to continue.
+    /// The `any` type is the most permissive type and matches TSC's recovery strategy.
+    ///
+    /// # Arguments
+    /// * `span` - The span where the missing type was expected
+    ///
+    /// # Returns
+    /// A type annotation containing a TSAnyKeyword type
+    pub(crate) fn create_dummy_any_type(&mut self, span: oxc_span::Span) -> Box<'a, TSTypeAnnotation<'a>> {
+        self.ast.alloc_ts_type_annotation(
+            span,
+            self.ast.ts_type_any_keyword(span),
+        )
+    }
+
+    /// Create a dummy 'unknown' type annotation for error recovery (stricter alternative).
+    ///
+    /// Used when a type annotation is required but missing, providing a stricter alternative
+    /// to `any`. The `unknown` type requires explicit type narrowing before use.
+    ///
+    /// # Arguments
+    /// * `span` - The span where the missing type was expected
+    ///
+    /// # Returns
+    /// A type annotation containing a TSUnknownKeyword type
+    ///
+    /// # Note
+    /// Currently unused but provided for cases where stricter recovery is preferred.
+    /// TSC typically uses `any` for recovery, so this matches their behavior.
+    #[expect(dead_code)]
+    pub(crate) fn create_dummy_unknown_type(&mut self, span: oxc_span::Span) -> Box<'a, TSTypeAnnotation<'a>> {
+        self.ast.alloc_ts_type_annotation(
+            span,
+            self.ast.ts_type_unknown_keyword(span),
+        )
     }
 }

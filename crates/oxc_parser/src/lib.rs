@@ -1502,4 +1502,95 @@ mod test {
         // Should parse multiple statements including valid ones
         assert!(ret.program.body.len() >= 2, "Should parse at least 2 statements");
     }
+
+    // M6.5.4: TypeScript-specific error recovery tests
+
+    #[test]
+    fn test_index_signature_missing_type_annotation_recovery() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            interface Config {
+                [key: string]
+                other: string;
+                value: number;
+            }
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should have 1 error for missing type annotation
+        assert_eq!(ret.errors.len(), 1, "Should have exactly 1 error");
+        assert!(
+            ret.errors[0].message.contains("type annotation"),
+            "Error should mention type annotation"
+        );
+
+        // But program should be parsed successfully
+        assert!(!ret.program.body.is_empty(), "Program should not be empty");
+    }
+
+    #[test]
+    fn test_enum_numeric_member_recovery() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            enum Numbers {
+                123 = 'test',
+                Valid = 'success',
+                456 = 'another'
+            }
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should have 2 errors (for 123 and 456)
+        assert_eq!(ret.errors.len(), 2, "Should have exactly 2 errors");
+
+        // Program should still be parsed
+        assert!(!ret.program.body.is_empty(), "Program should not be empty");
+    }
+
+    #[test]
+    fn test_using_declaration_export_recovery() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        // Simpler test: just verify export using is handled without crashing
+        let source = r"
+            export using resource = getResource();
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should report error(s) for export using
+        assert!(!ret.errors.is_empty(), "Should have at least 1 error for export using");
+
+        // Parser should not crash (test passes if we get here)
+    }
+
+    #[test]
+    fn test_typescript_errors_without_recovery_flag() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            interface Config {
+                [key: string]
+                other: string;
+            }
+        ";
+
+        // Parse WITHOUT recovery flag (default)
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = false;
+        let ret = parser.parse();
+
+        // Should still report error (but may not parse everything)
+        assert!(ret.errors.len() >= 1, "Should have at least 1 error");
+    }
 }
