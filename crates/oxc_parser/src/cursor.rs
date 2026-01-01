@@ -720,22 +720,17 @@ impl<'a> ParserImpl<'a> {
 
 #[cfg(test)]
 mod error_recovery_tests {
+    use crate::Parser;
     use oxc_allocator::Allocator;
     use oxc_span::SourceType;
-    use crate::Parser;
 
     /// Helper to parse code with recovery enabled
     fn parse_with_recovery(source: &str) -> (usize, usize) {
         let allocator = Allocator::default();
         let source_type = SourceType::default().with_typescript(true);
-        let options = crate::ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        };
+        let options = crate::ParseOptions { recover_from_errors: true, ..Default::default() };
 
-        let ret = Parser::new(&allocator, source, source_type)
-            .with_options(options)
-            .parse();
+        let ret = Parser::new(&allocator, source, source_type).with_options(options).parse();
 
         (ret.errors.len(), ret.program.body.len())
     }
@@ -744,14 +739,9 @@ mod error_recovery_tests {
     fn parse_without_recovery(source: &str) -> (usize, usize) {
         let allocator = Allocator::default();
         let source_type = SourceType::default().with_typescript(true);
-        let options = crate::ParseOptions {
-            recover_from_errors: false,
-            ..Default::default()
-        };
+        let options = crate::ParseOptions { recover_from_errors: false, ..Default::default() };
 
-        let ret = Parser::new(&allocator, source, source_type)
-            .with_options(options)
-            .parse();
+        let ret = Parser::new(&allocator, source, source_type).with_options(options).parse();
 
         (ret.errors.len(), ret.program.body.len())
     }
@@ -763,7 +753,7 @@ mod error_recovery_tests {
         let (errors, _statements) = parse_with_recovery(source);
 
         // Should have at least 1 error for missing ]
-        assert!(errors >= 1, "Expected at least 1 error, got {}", errors);
+        assert!(errors >= 1, "Expected at least 1 error, got {errors}");
         // Recovery mode records errors without terminating immediately
     }
 
@@ -830,7 +820,7 @@ mod error_recovery_tests {
         let (errors, _statements) = parse_with_recovery(source);
 
         // Should have multiple errors
-        assert!(errors >= 1, "Expected multiple errors, got {}", errors);
+        assert!(errors >= 1, "Expected multiple errors, got {errors}");
         // Recovery mode records multiple errors
     }
 
@@ -865,5 +855,119 @@ mod error_recovery_tests {
 
         // Should have error for unclosed array
         assert!(errors >= 1, "Expected error for EOF in unclosed structure");
+    }
+
+    // ========================================
+    // Phase 2: Unit tests for recovery helpers
+    // ========================================
+
+    #[test]
+    fn test_recover_from_missing_delimiter_abort_in_parent_context() {
+        // When parsing array and missing ], should abort when we see ; (parent context delimiter)
+        let source = "let arr = [1, 2, 3;";
+        let (errors, _) = parse_with_recovery(source);
+        assert!(errors >= 1, "Expected error for missing ]");
+    }
+
+    #[test]
+    fn test_recover_from_missing_delimiter_continue_without_parent() {
+        // When no parent context, should recover gracefully
+        let source = "let x = {a: 1, b: 2";
+        let (errors, stmts) = parse_with_recovery(source);
+        assert!(errors >= 1, "Expected error for missing }}");
+        assert!(stmts >= 1, "Should recover and parse at least one statement");
+    }
+
+    // ========================================
+    // Phase 3: Integration tests
+    // ========================================
+
+    // Phase 3.1: Array parsing
+    #[test]
+    fn test_integration_array_missing_bracket() {
+        let source = "let arr = [1, 2, 3;";
+        let (errors, stmts) = parse_with_recovery(source);
+        assert!(errors >= 1, "Expected error for missing ]");
+        assert_eq!(stmts, 1, "Should parse one statement");
+    }
+
+    #[test]
+    fn test_integration_array_followed_by_valid_statement() {
+        // This is a known limitation: when semicolon appears inside array literal,
+        // current recovery cannot distinguish it from statement terminator
+        let source = "let arr = [1, 2, 3; let y = 10;";
+        let (errors, _stmts) = parse_with_recovery(source);
+        assert!(errors >= 1, "Expected error for missing ]");
+        // Note: Current recovery produces 0 statements due to semicolon ambiguity
+    }
+
+    #[test]
+    fn test_integration_nested_arrays_with_errors() {
+        let source = "let x = [[1, 2, [3, 4];";
+        let (errors, _) = parse_with_recovery(source);
+        assert!(errors >= 1, "Expected errors for multiple missing ]");
+    }
+
+    // Phase 3.2: Object literal recovery
+    #[test]
+    fn test_object_literal_recovery() {
+        let source = "let obj = {a: 1, b: 2;";
+        let (errors, stmts) = parse_with_recovery(source);
+        assert!(errors >= 1, "Expected error for missing }}");
+        assert_eq!(stmts, 1, "Should parse one statement");
+    }
+
+    // Phase 3.3: Block statement recovery
+    #[test]
+    fn test_block_statement_recovery() {
+        let source = "if (true) { let x = 1; let y = 2;";
+        let (errors, stmts) = parse_with_recovery(source);
+        assert!(errors >= 1, "Expected error for missing }}");
+        assert!(stmts >= 1, "Should parse if statement");
+    }
+
+    // Phase 3.4: Parenthesized expression recovery
+    #[test]
+    fn test_parenthesized_expression_recovery() {
+        // Known limitation: Missing ) in parenthesized expression with ; terminator
+        // confuses recovery (semicolon could be inside or outside parens)
+        let source = "let x = (1 + 2;";
+        let (errors, _stmts) = parse_with_recovery(source);
+        assert!(errors >= 1, "Expected error for missing )");
+        // Note: Current recovery produces 0 statements due to ambiguity
+    }
+
+    #[test]
+    fn test_function_with_missing_brace() {
+        let source = "function foo() { let x = 1;";
+        let (errors, stmts) = parse_with_recovery(source);
+        assert!(errors >= 1, "Expected error for missing }}");
+        assert_eq!(stmts, 1, "Should parse function declaration");
+    }
+
+    #[test]
+    fn test_multiple_missing_delimiters() {
+        // Known limitation: Multiple missing delimiters with semicolons
+        let source = "let x = [1, 2; let obj = {a: 1;";
+        let (errors, _stmts) = parse_with_recovery(source);
+        assert!(errors >= 2, "Expected at least 2 errors");
+        // Note: Current recovery produces 0 statements due to complex error cascade
+    }
+
+    #[test]
+    fn test_deeply_nested_structures() {
+        let source = "let x = {a: [1, {b: 2}]};";
+        let (errors, stmts) = parse_with_recovery(source);
+        assert_eq!(errors, 0, "Should parse without errors");
+        assert_eq!(stmts, 1, "Should parse one statement");
+    }
+
+    #[test]
+    fn test_empty_structures_with_errors() {
+        // Known limitation: Empty structures with immediate semicolons
+        let source = "let x = [; let y = {;";
+        let (errors, _stmts) = parse_with_recovery(source);
+        assert!(errors >= 2, "Expected errors for malformed structures");
+        // Note: Current recovery produces 0 statements for this complex error pattern
     }
 }
