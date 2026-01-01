@@ -181,8 +181,6 @@ impl<'a> ParserImpl<'a> {
 
         if self.options.recover_from_errors {
             // Recovery mode: record error but allow parsing to continue
-            #[cfg(debug_assertions)]
-            eprintln!("Recoverable expect failure: {} at {:?}", expected_kind.to_str(), range);
             self.error(error);
         } else {
             // Non-recovery mode: terminate immediately
@@ -722,17 +720,22 @@ impl<'a> ParserImpl<'a> {
 
 #[cfg(test)]
 mod error_recovery_tests {
-    use crate::Parser;
     use oxc_allocator::Allocator;
     use oxc_span::SourceType;
+    use crate::Parser;
 
     /// Helper to parse code with recovery enabled
     fn parse_with_recovery(source: &str) -> (usize, usize) {
         let allocator = Allocator::default();
         let source_type = SourceType::default().with_typescript(true);
-        let options = crate::ParseOptions { recover_from_errors: true, ..Default::default() };
+        let options = crate::ParseOptions {
+            recover_from_errors: true,
+            ..Default::default()
+        };
 
-        let ret = Parser::new(&allocator, source, source_type).with_options(options).parse();
+        let ret = Parser::new(&allocator, source, source_type)
+            .with_options(options)
+            .parse();
 
         (ret.errors.len(), ret.program.body.len())
     }
@@ -741,9 +744,14 @@ mod error_recovery_tests {
     fn parse_without_recovery(source: &str) -> (usize, usize) {
         let allocator = Allocator::default();
         let source_type = SourceType::default().with_typescript(true);
-        let options = crate::ParseOptions { recover_from_errors: false, ..Default::default() };
+        let options = crate::ParseOptions {
+            recover_from_errors: false,
+            ..Default::default()
+        };
 
-        let ret = Parser::new(&allocator, source, source_type).with_options(options).parse();
+        let ret = Parser::new(&allocator, source, source_type)
+            .with_options(options)
+            .parse();
 
         (ret.errors.len(), ret.program.body.len())
     }
