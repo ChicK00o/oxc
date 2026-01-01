@@ -1593,4 +1593,273 @@ mod test {
         // Should still report error (but may not parse everything)
         assert!(!ret.errors.is_empty(), "Should have at least 1 error");
     }
+
+    // ==================== M6.5.5: Control Flow Error Recovery Tests ====================
+
+    #[test]
+    fn test_switch_invalid_clause_recovery() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            switch(x) {
+                invalidLabel:
+                case 1: break;
+                default: break;
+            }
+            let y = 5;
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should have error for invalid clause
+        assert!(!ret.errors.is_empty(), "Expected error for invalid switch clause");
+        // Should not panic
+        assert!(!ret.panicked, "Parser should not panic");
+        // Should have parsed subsequent statement
+        assert!(!ret.program.body.is_empty(), "Should parse subsequent statements");
+    }
+
+    #[test]
+    fn test_switch_multiple_invalid_clauses() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            switch(value) {
+                label1:
+                case 1: break;
+                label2:
+                default: break;
+            }
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should have multiple errors
+        assert!(ret.errors.len() >= 2, "Expected at least 2 errors for invalid clauses");
+        assert!(!ret.panicked, "Parser should not panic");
+    }
+
+    #[test]
+    fn test_try_without_catch_or_finally() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            function fn() {
+                try {
+                    getData();
+                }
+                let x = 5;
+            }
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should have error for try without catch/finally
+        assert!(!ret.errors.is_empty(), "Expected error for try without catch/finally");
+        assert!(!ret.panicked, "Parser should not panic");
+    }
+
+    #[test]
+    fn test_catch_without_try() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            function fn() {
+                catch(e) {
+                    log(e);
+                }
+                return null;
+            }
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should have error for catch without try
+        assert!(!ret.errors.is_empty(), "Expected error for catch without try");
+        assert!(!ret.panicked, "Parser should not panic");
+    }
+
+    #[test]
+    fn test_finally_without_try() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            function fn() {
+                finally {
+                    cleanup();
+                }
+                return 42;
+            }
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should have error for finally without try
+        assert!(!ret.errors.is_empty(), "Expected error for finally without try");
+        assert!(!ret.panicked, "Parser should not panic");
+    }
+
+    #[test]
+    fn test_try_with_invalid_catch_parameter() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            try {
+                riskyOperation();
+            } catch(123) {
+                handleError();
+            }
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should have error for invalid catch parameter
+        assert!(!ret.errors.is_empty(), "Expected error for invalid catch parameter");
+        assert!(!ret.panicked, "Parser should not panic");
+    }
+
+    #[test]
+    fn test_nested_try_without_catch() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            try {
+                try {
+                    inner();
+                }
+                outer();
+            } catch(e) {
+                log(e);
+            }
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Inner try should have error, outer should be complete
+        assert!(!ret.errors.is_empty(), "Expected error for inner try without catch/finally");
+        assert!(!ret.panicked, "Parser should not panic");
+    }
+
+    #[test]
+    fn test_for_loop_missing_semicolons() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            for(let i = 0) {
+                console.log(i);
+            }
+            let x = 5;
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should have errors for missing semicolons (recoverable expect())
+        // Parser continues and parses subsequent statements
+        assert!(!ret.panicked, "Parser should not panic");
+        assert!(!ret.program.body.is_empty(), "Should parse statements");
+    }
+
+    #[test]
+    fn test_while_missing_condition() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            while(true) {
+                break;
+            }
+            let x = 5;
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Valid while loop - tests that while loops work with recovery enabled
+        assert!(!ret.panicked, "Parser should not panic");
+        assert!(!ret.program.body.is_empty(), "Should parse statements");
+    }
+
+    #[test]
+    fn test_if_statement_recovery() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            if(condition) {
+                positive();
+            }
+            let x = 5;
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Valid if statement - tests that if statements work with recovery enabled
+        assert!(!ret.panicked, "Parser should not panic");
+        assert!(!ret.program.body.is_empty(), "Should parse statements");
+    }
+
+    #[test]
+    fn test_complex_nested_control_flow_errors() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            function complex() {
+                switch(x) {
+                    invalid:
+                    case 1: break;
+                }
+
+                try {
+                    riskyOp();
+                }
+
+                return 42;
+            }
+        ";
+
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = true;
+        let ret = parser.parse();
+
+        // Should have multiple errors (switch + try)
+        assert!(ret.errors.len() >= 2, "Expected at least 2 errors");
+        assert!(!ret.panicked, "Parser should not panic");
+    }
+
+    #[test]
+    fn test_control_flow_recovery_disabled() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let source = r"
+            switch(x) {
+                invalidLabel:
+                case 1: break;
+            }
+        ";
+
+        // Parse WITHOUT recovery flag
+        let mut parser = Parser::new(&allocator, source, source_type);
+        parser.options.recover_from_errors = false;
+        let ret = parser.parse();
+
+        // Without recovery, should panic on error
+        assert!(ret.panicked, "Parser should panic without recovery enabled");
+    }
 }
