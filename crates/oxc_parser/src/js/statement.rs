@@ -99,6 +99,9 @@ impl<'a> ParserImpl<'a> {
             Kind::Switch => self.parse_switch_statement(),
             Kind::Throw => self.parse_throw_statement(),
             Kind::Try => self.parse_try_statement(),
+            // Orphaned catch/finally detection (error recovery)
+            Kind::Catch => self.parse_orphaned_catch_clause(),
+            Kind::Finally => self.parse_orphaned_finally_clause(),
             Kind::Debugger => self.parse_debugger_statement(),
             Kind::Class => self.parse_class_statement(
                 self.start_span(),
@@ -818,6 +821,66 @@ impl<'a> ParserImpl<'a> {
         };
 
         self.ast.statement_try(self.end_span(span), block, handler, finalizer)
+    }
+
+    /// Parse orphaned catch clause (catch without try) for error recovery
+    fn parse_orphaned_catch_clause(&mut self) -> Statement<'a> {
+        let span = self.start_span();
+
+        // Report error for orphaned catch
+        self.error(diagnostics::catch_without_try(self.cur_token().span()));
+
+        // Try to parse the catch clause anyway for better recovery
+        if self.options.recover_from_errors {
+            // Skip the catch keyword and its block to continue parsing
+            self.bump_any(); // bump 'catch'
+
+            // Skip optional parameter parentheses
+            if self.at(Kind::LParen) {
+                self.bump_any();
+                // Skip until closing paren
+                while !self.at(Kind::RParen) && !self.at(Kind::Eof) {
+                    self.bump_any();
+                }
+                if self.at(Kind::RParen) {
+                    self.bump_any();
+                }
+            }
+
+            // Skip the catch block
+            if self.at(Kind::LCurly) {
+                let _ = self.parse_block();
+            }
+
+            // Return an empty statement to continue parsing
+            self.ast.statement_empty(self.end_span(span))
+        } else {
+            self.unexpected()
+        }
+    }
+
+    /// Parse orphaned finally clause (finally without try) for error recovery
+    fn parse_orphaned_finally_clause(&mut self) -> Statement<'a> {
+        let span = self.start_span();
+
+        // Report error for orphaned finally
+        self.error(diagnostics::finally_without_try(self.cur_token().span()));
+
+        // Try to parse the finally clause anyway for better recovery
+        if self.options.recover_from_errors {
+            // Skip the finally keyword and its block to continue parsing
+            self.bump_any(); // bump 'finally'
+
+            // Skip the finally block
+            if self.at(Kind::LCurly) {
+                let _ = self.parse_block();
+            }
+
+            // Return an empty statement to continue parsing
+            self.ast.statement_empty(self.end_span(span))
+        } else {
+            self.unexpected()
+        }
     }
 
     fn parse_catch_clause(&mut self) -> Box<'a, CatchClause<'a>> {

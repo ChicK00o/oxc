@@ -623,6 +623,20 @@ pub fn expect_catch_parameter(span: Span) -> OxcDiagnostic {
 }
 
 #[cold]
+pub fn catch_without_try(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("Catch clause requires a preceding try statement")
+        .with_label(span)
+        .with_help("Add a 'try' statement before this catch clause")
+}
+
+#[cold]
+pub fn finally_without_try(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("Finally clause requires a preceding try statement")
+        .with_label(span)
+        .with_help("Add a 'try' statement before this finally clause")
+}
+
+#[cold]
 pub fn v8_intrinsic_spread_elem(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("V8 runtime calls cannot have spread elements as arguments")
         .with_label(span)
