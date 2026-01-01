@@ -700,9 +700,19 @@ impl<'a> ParserImpl<'a> {
                         self.bump_any();
                         self.parse_import_expression(span, Some(ImportPhase::Defer))
                     }
+                    // M6.5.3: Error recovery for invalid import.* (not .meta, .source, .defer)
                     _ => {
-                        self.bump_any();
-                        self.fatal_error(diagnostics::import_meta(self.end_span(span)))
+                        self.bump_any(); // Skip the invalid property name
+                        let error_span = self.end_span(span);
+                        if self.options.recover_from_errors {
+                            self.error(diagnostics::import_meta(error_span));
+                            // Return valid import.meta anyway
+                            let property = self.ast.identifier_name(error_span, Atom::from("meta"));
+                            self.module_record_builder.visit_import_meta(error_span);
+                            self.ast.expression_meta_property(error_span, meta, property)
+                        } else {
+                            self.fatal_error(diagnostics::import_meta(error_span))
+                        }
                     }
                 }
             }

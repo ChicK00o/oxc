@@ -37,10 +37,25 @@ impl<'a> ParserImpl<'a> {
         phase: Option<ImportPhase>,
     ) -> Expression<'a> {
         self.expect(Kind::LParen);
+
+        // M6.5.3: Error recovery for empty import()
         if self.eat(Kind::RParen) {
-            let error = diagnostics::import_requires_a_specifier(self.end_span(span));
+            let error_span = self.end_span(span);
+            if self.options.recover_from_errors {
+                self.error(diagnostics::import_requires_a_specifier(error_span));
+                // Return dummy import with empty string literal
+                let dummy_span = error_span;
+                let expression =
+                    self.ast.expression_string_literal(dummy_span, Atom::from(""), None);
+                let expr =
+                    self.ast.alloc_import_expression(self.end_span(span), expression, None, phase);
+                self.module_record_builder.visit_import_expression(&expr);
+                return Expression::ImportExpression(expr);
+            }
+            let error = diagnostics::import_requires_a_specifier(error_span);
             return self.fatal_error(error);
         }
+
         let has_in = self.ctx.has_in();
         self.ctx = self.ctx.and_in(true);
         let expression = self.parse_assignment_expression_or_higher();
@@ -51,10 +66,29 @@ impl<'a> ParserImpl<'a> {
         };
         // Allow trailing comma
         self.bump(Kind::Comma);
+
+        // M6.5.3: Error recovery for invalid import() arguments (too many args)
         if !self.eat(Kind::RParen) {
-            let error = diagnostics::import_arguments(self.end_span(span));
-            return self.fatal_error(error);
+            let error_span = self.end_span(span);
+            if self.options.recover_from_errors {
+                self.error(diagnostics::import_arguments(error_span));
+                // Skip extra arguments until we find closing paren or EOF
+                while !self.at(Kind::RParen) && !self.at(Kind::Eof) {
+                    if self.eat(Kind::Comma) {
+                        if !self.at(Kind::RParen) {
+                            let _ = self.parse_assignment_expression_or_higher();
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(Kind::RParen);
+            } else {
+                let error = diagnostics::import_arguments(error_span);
+                return self.fatal_error(error);
+            }
         }
+
         self.ctx = self.ctx.and_in(has_in);
         let expr =
             self.ast.alloc_import_expression(self.end_span(span), expression, arguments, phase);
@@ -438,12 +472,25 @@ impl<'a> ParserImpl<'a> {
             _ => ImportAttributeKey::Identifier(self.parse_identifier_name()),
         };
         self.expect(Kind::Colon);
-        if !self.at(Kind::Str) {
-            return self.fatal_error(diagnostics::import_attribute_value_must_be_string_literal(
-                self.cur_token().span(),
-            ));
-        }
-        let value = self.parse_literal_string();
+
+        // M6.5.3: Error recovery for non-string import attribute values
+        let value = if self.at(Kind::Str) {
+            self.parse_literal_string()
+        } else {
+            let error_span = self.cur_token().span();
+            if self.options.recover_from_errors {
+                self.error(diagnostics::import_attribute_value_must_be_string_literal(error_span));
+                // Skip invalid value
+                self.bump_any();
+                // Create dummy empty string literal using AST builder
+                self.ast.string_literal(error_span, Atom::from(""), None)
+            } else {
+                return self.fatal_error(
+                    diagnostics::import_attribute_value_must_be_string_literal(error_span),
+                );
+            }
+        };
+
         self.ast.import_attribute(self.end_span(span), key, value)
     }
 
@@ -507,7 +554,22 @@ impl<'a> ParserImpl<'a> {
                     }
                     ModuleDeclaration::ExportNamedDeclaration(export_named_decl)
                 } else {
-                    return self.fatal_error(diagnostics::unexpected_export(stmt.span()));
+                    // M6.5.3: Error recovery for unexpected export statement
+                    if self.options.recover_from_errors {
+                        self.error(diagnostics::unexpected_export(stmt.span()));
+                        // Return empty export declaration
+                        let export_decl = self.ast.alloc_export_named_declaration(
+                            self.end_span(span),
+                            None,
+                            self.ast.vec(),
+                            None,
+                            ImportOrExportKind::Value,
+                            NONE,
+                        );
+                        ModuleDeclaration::ExportNamedDeclaration(export_decl)
+                    } else {
+                        return self.fatal_error(diagnostics::unexpected_export(stmt.span()));
+                    }
                 }
             }
             Kind::At => {
@@ -923,6 +985,59 @@ impl<'a> ParserImpl<'a> {
             self.module_record_builder.visit_export_all_declaration(&export_all_decl);
         }
         export_all_decl
+    }
+
+    /// M6.5.3: Creates a dummy import specifier for error recovery.
+    ///
+    /// When parsing import specifiers fails (e.g., `import { * } from "m"`),
+    /// this helper creates a placeholder specifier with a special `__invalid_import__`
+    /// name that can be identified later for diagnostics or filtering.
+    ///
+    /// # Returns
+    ///
+    /// A dummy `ImportDeclarationSpecifier` with:
+    /// - Both `imported` and `local` names set to `__invalid_import__`
+    /// - `ImportOrExportKind::Value` as the import kind
+    /// - Span from the current token position
+    #[expect(dead_code)]
+    fn create_dummy_import_specifier(&self) -> ImportDeclarationSpecifier<'a> {
+        let span = self.cur_token().span();
+        let dummy_name =
+            self.ast.module_export_name_identifier_name(span, Atom::from("__invalid_import__"));
+        let local = self.ast.binding_identifier(span, Atom::from("__invalid_import__"));
+        self.ast.import_declaration_specifier_import_specifier(
+            span,
+            dummy_name,
+            local,
+            ImportOrExportKind::Value,
+        )
+    }
+
+    /// M6.5.3: Creates a dummy export specifier for error recovery.
+    ///
+    /// When parsing export specifiers fails (e.g., `export { * }`),
+    /// this helper creates a placeholder specifier with a special `__invalid_export__`
+    /// name that can be identified later for diagnostics or filtering.
+    ///
+    /// # Returns
+    ///
+    /// A dummy `ExportSpecifier` with:
+    /// - Both `local` and `exported` names set to `__invalid_export__`
+    /// - `ImportOrExportKind::Value` as the export kind
+    /// - Span from the current token position
+    #[expect(dead_code)]
+    fn create_dummy_export_specifier(&self) -> ExportSpecifier<'a> {
+        let span = self.cur_token().span();
+        let local =
+            self.ast.module_export_name_identifier_name(span, Atom::from("__invalid_export__"));
+        let exported =
+            self.ast.module_export_name_identifier_name(span, Atom::from("__invalid_export__"));
+        ExportSpecifier {
+            span,
+            local,
+            exported,
+            export_kind: ImportOrExportKind::Value,
+        }
     }
 
     // ImportSpecifier :
