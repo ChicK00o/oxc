@@ -39,7 +39,15 @@ impl<'a> ParserImpl<'a> {
         self.set_fatal_error(error);
     }
 
-    /// Return error info at current token
+    /// Return error info at current token and attempt recovery.
+    ///
+    /// **Recovery Behavior**:
+    /// - When `recover_from_errors` is `true`: Records error, skips token if safe, returns dummy
+    /// - When `recover_from_errors` is `false`: Sets fatal error and terminates parsing
+    ///
+    /// **Token Skipping**: In recovery mode, skips the unexpected token only if it doesn't
+    /// belong to a parent parsing context. If the token is meaningful to a parent context,
+    /// it's left for the parent to handle.
     ///
     /// # Panics
     ///
@@ -47,8 +55,43 @@ impl<'a> ParserImpl<'a> {
     #[must_use]
     #[cold]
     pub(crate) fn unexpected<T: Dummy<'a>>(&mut self) -> T {
-        self.set_unexpected();
-        Dummy::dummy(self.ast.allocator)
+        if self.options.recover_from_errors {
+            // Recovery mode: record error but attempt to continue
+            let span = self.cur_token().span();
+
+            // Check for special cases first (merge conflict, undetermined)
+            if matches!(self.cur_kind(), Kind::Eof | Kind::Undetermined)
+                && let Some(error) = self.lexer.errors.pop()
+            {
+                self.error(error);
+                return Dummy::dummy(self.ast.allocator);
+            }
+
+            // Check for merge conflict marker
+            if let Some(start_span) = self.is_merge_conflict_marker() {
+                let (middle_span, end_span) = self.find_merge_conflict_markers();
+                let error = diagnostics::merge_conflict_marker(start_span, middle_span, end_span);
+                self.error(error);
+                return Dummy::dummy(self.ast.allocator);
+            }
+
+            // Regular unexpected token
+            let error = diagnostics::unexpected_token(span);
+            self.error(error);
+
+            // Check if token belongs to parent context using M6.5.0 synchronization
+            if !self.is_in_some_parsing_context() {
+                // Token is meaningless - safe to skip
+                self.bump_any();
+            }
+            // Otherwise: leave token for parent context to handle
+
+            Dummy::dummy(self.ast.allocator)
+        } else {
+            // Non-recovery mode: terminate immediately
+            self.set_unexpected();
+            Dummy::dummy(self.ast.allocator)
+        }
     }
 
     /// Push a Syntax Error
