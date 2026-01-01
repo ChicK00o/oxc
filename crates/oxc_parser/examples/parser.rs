@@ -46,8 +46,18 @@ fn main() -> Result<(), String> {
 
     // Parse the source code
     let allocator = Allocator::default();
+
+    // Check for error recovery flag from environment
+    let recover_from_errors = std::env::var("OXC_RECOVER_ERRORS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     let ret = Parser::new(&allocator, &source_text, source_type)
-        .with_options(ParseOptions { parse_regular_expression: true, ..ParseOptions::default() })
+        .with_options(ParseOptions {
+            parse_regular_expression: true,
+            recover_from_errors,
+            ..ParseOptions::default()
+        })
         .parse();
     let mut program = ret.program;
 
