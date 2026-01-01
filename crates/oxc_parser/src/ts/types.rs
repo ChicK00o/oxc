@@ -1318,9 +1318,22 @@ impl<'a> ParserImpl<'a> {
         if params.len() != 1 {
             self.error(diagnostics::index_signature_one_parameter(self.end_span(span)));
         }
-        let Some(type_annotation) = self.parse_ts_type_annotation() else {
-            return self
-                .fatal_error(diagnostics::index_signature_type_annotation(self.end_span(span)));
+        let type_annotation = if let Some(annotation) = self.parse_ts_type_annotation() {
+            annotation
+        } else {
+            // Error recovery: create dummy 'any' type for missing annotation
+            if self.options.recover_from_errors {
+                self.error(diagnostics::index_signature_type_annotation(self.end_span(span)));
+                // Create dummy 'any' type
+                let any_span = self.cur_token().span();
+                self.ast.alloc_ts_type_annotation(
+                    any_span,
+                    self.ast.ts_type_any_keyword(any_span),
+                )
+            } else {
+                return self
+                    .fatal_error(diagnostics::index_signature_type_annotation(self.end_span(span)));
+            }
         };
         self.parse_type_member_semicolon();
         self.ast.alloc_ts_index_signature(

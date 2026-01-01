@@ -141,24 +141,70 @@ impl<'a> ParserImpl<'a> {
                 }
                 Expression::NumericLiteral(literal) => {
                     let error = diagnostics::enum_member_cannot_have_numeric_name(literal.span());
-                    self.fatal_error(error)
+                    if self.options.recover_from_errors {
+                        self.error(error);
+                        // Convert numeric literal to valid identifier by prefixing with '_'
+                        let num_str = literal.value.to_string();
+                        let identifier = self.ast.identifier_name(
+                            literal.span(),
+                            self.ast.atom(&format!("_{}", num_str)),
+                        );
+                        TSEnumMemberName::Identifier(self.alloc(identifier))
+                    } else {
+                        self.fatal_error(error)
+                    }
                 }
                 expr => {
                     let error =
                         diagnostics::computed_property_names_not_allowed_in_enums(expr.span());
-                    self.fatal_error(error)
+                    if self.options.recover_from_errors {
+                        self.error(error);
+                        // Create dummy identifier for computed property
+                        let identifier = self.ast.identifier_name(
+                            expr.span(),
+                            self.ast.atom("__computed__"),
+                        );
+                        TSEnumMemberName::Identifier(self.alloc(identifier))
+                    } else {
+                        self.fatal_error(error)
+                    }
                 }
             },
             Kind::NoSubstitutionTemplate | Kind::TemplateHead => {
                 let error = diagnostics::computed_property_names_not_allowed_in_enums(
                     self.cur_token().span(),
                 );
-                self.fatal_error(error)
+                if self.options.recover_from_errors {
+                    self.error(error);
+                    // Create dummy identifier for template literal
+                    let span = self.cur_token().span();
+                    let identifier = self.ast.identifier_name(
+                        span,
+                        self.ast.atom("__template__"),
+                    );
+                    self.bump_any(); // Consume the template token
+                    TSEnumMemberName::Identifier(self.alloc(identifier))
+                } else {
+                    self.fatal_error(error)
+                }
             }
             kind if kind.is_number() => {
                 let error =
                     diagnostics::enum_member_cannot_have_numeric_name(self.cur_token().span());
-                self.fatal_error(error)
+                if self.options.recover_from_errors {
+                    self.error(error);
+                    // Convert numeric token to valid identifier by prefixing with '_'
+                    let span = self.cur_token().span();
+                    let num_str = self.cur_src();
+                    let identifier = self.ast.identifier_name(
+                        span,
+                        self.ast.atom(&format!("_{}", num_str)),
+                    );
+                    self.bump_any(); // Consume the numeric token
+                    TSEnumMemberName::Identifier(self.alloc(identifier))
+                } else {
+                    self.fatal_error(error)
+                }
             }
             _ => {
                 let ident_name = self.parse_identifier_name();
@@ -576,21 +622,78 @@ impl<'a> ParserImpl<'a> {
                 Declaration::VariableDeclaration(decl)
             }
             Kind::Using if self.is_using_declaration() => {
-                self.expect(Kind::Using);
-                let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
-                self.fatal_error(diagnostics::using_declaration_cannot_be_exported(
-                    identifier,
-                    self.end_span(start_span),
-                ))
+                if self.options.recover_from_errors {
+                    // Get identifier for error message before consuming tokens
+                    self.expect(Kind::Using);
+                    let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
+                    self.error(diagnostics::using_declaration_cannot_be_exported(
+                        identifier,
+                        self.end_span(start_span),
+                    ));
+                    // Parse the using declaration manually (Using token already consumed)
+                    // Parse variable declarators
+                    let kind = VariableDeclarationKind::Using;
+                    let mut declarations = self.ast.vec();
+                    loop {
+                        let declaration = self.parse_variable_declarator(VariableDeclarationParent::Statement, kind);
+                        declarations.push(declaration);
+                        if !self.eat(Kind::Comma) {
+                            break;
+                        }
+                    }
+                    self.asi();
+                    let using_decl = self.ast.alloc_variable_declaration(
+                        self.end_span(start_span),
+                        kind,
+                        declarations,
+                        false, // declare
+                    );
+                    Declaration::VariableDeclaration(using_decl)
+                } else {
+                    self.expect(Kind::Using);
+                    let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
+                    self.fatal_error(diagnostics::using_declaration_cannot_be_exported(
+                        identifier,
+                        self.end_span(start_span),
+                    ))
+                }
             }
             Kind::Await if self.is_using_statement() => {
-                self.expect(Kind::Await);
-                self.expect(Kind::Using);
-                let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
-                self.fatal_error(diagnostics::using_declaration_cannot_be_exported(
-                    identifier,
-                    self.end_span(start_span),
-                ))
+                if self.options.recover_from_errors {
+                    self.expect(Kind::Await);
+                    self.expect(Kind::Using);
+                    let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
+                    self.error(diagnostics::using_declaration_cannot_be_exported(
+                        identifier,
+                        self.end_span(start_span),
+                    ));
+                    // Parse the await using declaration manually (Await and Using tokens already consumed)
+                    let kind = VariableDeclarationKind::AwaitUsing;
+                    let mut declarations = self.ast.vec();
+                    loop {
+                        let declaration = self.parse_variable_declarator(VariableDeclarationParent::Statement, kind);
+                        declarations.push(declaration);
+                        if !self.eat(Kind::Comma) {
+                            break;
+                        }
+                    }
+                    self.asi();
+                    let using_decl = self.ast.alloc_variable_declaration(
+                        self.end_span(start_span),
+                        kind,
+                        declarations,
+                        false, // declare
+                    );
+                    Declaration::VariableDeclaration(using_decl)
+                } else {
+                    self.expect(Kind::Await);
+                    self.expect(Kind::Using);
+                    let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
+                    self.fatal_error(diagnostics::using_declaration_cannot_be_exported(
+                        identifier,
+                        self.end_span(start_span),
+                    ))
+                }
             }
             Kind::Class => {
                 let decl = self.parse_class_declaration(start_span, modifiers, decorators);

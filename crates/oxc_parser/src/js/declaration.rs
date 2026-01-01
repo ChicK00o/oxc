@@ -95,7 +95,7 @@ impl<'a> ParserImpl<'a> {
         self.ast.alloc_variable_declaration(self.end_span(start_span), kind, declarations, declare)
     }
 
-    fn parse_variable_declarator(
+    pub(crate) fn parse_variable_declarator(
         &mut self,
         decl_parent: VariableDeclarationParent,
         kind: VariableDeclarationKind,
