@@ -857,4 +857,462 @@ mod test {
         assert!(ret.errors.is_empty());
         assert_eq!(ret.program.body.len(), 2);
     }
+
+    // M6.5.3: Module/Import/Export Error Recovery Tests
+
+    #[test]
+    fn test_empty_import_call() {
+        let source = r"
+            import();
+            let x = 5;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Should have 1 error for empty import
+        assert_eq!(ret.errors.len(), 1);
+        assert!(ret.errors[0].message.contains("import"));
+
+        // Should have 2 statements (import expression + variable declaration)
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_empty_import_subsequent_code_parsed() {
+        let source = r"
+            import();
+            function foo() { return 42; }
+            class Bar {}
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Error for empty import
+        assert_eq!(ret.errors.len(), 1);
+
+        // All 3 statements should be parsed
+        assert_eq!(ret.program.body.len(), 3);
+    }
+
+    #[test]
+    fn test_import_too_many_args() {
+        let source = "import(source, options, extra);";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Should have error for too many arguments
+        assert!(!ret.errors.is_empty());
+
+        // Import call should still be in AST
+        assert_eq!(ret.program.body.len(), 1);
+    }
+
+    #[test]
+    fn test_import_four_args() {
+        let source = "import(a, b, c, d);";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert!(!ret.errors.is_empty());
+        assert_eq!(ret.program.body.len(), 1);
+    }
+
+    #[test]
+    fn test_import_many_args_with_subsequent_code() {
+        let source = r"
+            import(source, opts, extra1, extra2);
+            const x = 10;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert!(!ret.errors.is_empty());
+        // Both statements parsed
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_invalid_import_meta() {
+        let source = "import.notmeta";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Should have error
+        assert_eq!(ret.errors.len(), 1);
+
+        // Should still have expression in AST
+        assert_eq!(ret.program.body.len(), 1);
+    }
+
+    #[test]
+    fn test_invalid_import_meta_with_subsequent_code() {
+        let source = r"
+            import.invalid;
+            const x = import.meta;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Error for invalid property
+        assert_eq!(ret.errors.len(), 1);
+
+        // Both statements parsed
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_invalid_import_attribute_value() {
+        let source = r#"
+            import "module" with { type: 123 };
+            export class MyClass {}
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Error for non-string attribute value
+        assert_eq!(ret.errors.len(), 1);
+        assert!(ret.errors[0].message.contains("string"));
+
+        // Both import and export should be in AST
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_invalid_import_attribute_identifier_value() {
+        let source = r#"import "m" with { type: invalid };"#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert!(!ret.errors.is_empty());
+        assert_eq!(ret.program.body.len(), 1);
+    }
+
+    #[test]
+    fn test_invalid_import_attribute_with_valid_import_after() {
+        let source = r#"
+            import "m1" with { type: 456 };
+            import { valid } from "m2";
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Error for first import
+        assert!(!ret.errors.is_empty());
+
+        // Both imports in AST
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_multiple_import_export_errors() {
+        let source = r#"
+            import();
+            import { valid } from "other";
+            export class MyClass {}
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // 1 error for empty import
+        assert_eq!(ret.errors.len(), 1);
+
+        // All 3 statements in AST
+        assert_eq!(ret.program.body.len(), 3);
+    }
+
+    #[test]
+    fn test_single_import_error_no_cascade() {
+        let source = r#"
+            import();
+            import { a } from "n";
+            import { b } from "o";
+            export class C {}
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Only 1 error (first import)
+        assert_eq!(ret.errors.len(), 1);
+
+        // All 4 statements parsed
+        assert_eq!(ret.program.body.len(), 4);
+    }
+
+    #[test]
+    fn test_mixed_module_errors() {
+        let source = r#"
+            import();
+            import "m" with { type: 123 };
+            import.invalid;
+            import { valid } from "ok";
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // 3 errors total
+        assert_eq!(ret.errors.len(), 3);
+
+        // All 4 statements in AST
+        assert_eq!(ret.program.body.len(), 4);
+    }
+
+    #[test]
+    fn test_error_recovery_preserves_valid_imports() {
+        let source = r#"
+            import { foo } from "valid1";
+            import();
+            import { bar } from "valid2";
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // 1 error for empty import
+        assert_eq!(ret.errors.len(), 1);
+
+        // All imports in AST
+        assert_eq!(ret.program.body.len(), 3);
+    }
+
+    #[test]
+    fn test_import_error_with_complex_subsequent_code() {
+        let source = r#"
+            import();
+            class Foo {
+                method() {
+                    return import("dynamic");
+                }
+            }
+            function bar() {}
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Error for empty static import
+        assert_eq!(ret.errors.len(), 1);
+
+        // All top-level statements parsed
+        assert_eq!(ret.program.body.len(), 3);
+    }
+
+    #[test]
+    fn test_stress_many_import_errors() {
+        let source = r#"
+            import();
+            import();
+            import();
+            import { valid1 } from "m1";
+            import();
+            import { valid2 } from "m2";
+            import();
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // 5 errors for empty imports
+        assert_eq!(ret.errors.len(), 5);
+
+        // All 7 statements in AST
+        assert_eq!(ret.program.body.len(), 7);
+    }
+
+    #[test]
+    fn test_error_messages_quality() {
+        let source = "import();";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        let error = &ret.errors[0];
+        // Should indicate what's wrong
+        assert!(
+            error.message.contains("import") || error.message.contains("specifier"),
+            "Error should mention import/specifier: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn test_import_meta_error_message() {
+        let source = "import.invalid;";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert!(!ret.errors.is_empty());
+        let error = &ret.errors[0];
+        assert!(error.message.contains("import") || error.message.contains("meta"));
+    }
+
+    #[test]
+    fn test_import_attribute_error_message() {
+        let source = r#"import "m" with { type: 123 };"#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        let error = &ret.errors[0];
+        assert!(error.message.contains("string"));
+    }
+
+    // Named import/export error tests
+    #[test]
+    fn test_named_import_with_trailing_comma() {
+        let source = r#"
+            import { a, } from "module";
+            const x = 1;
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Trailing comma is actually valid, so no error
+        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_named_import_multiple_valid() {
+        let source = r#"
+            import { a, b, c } from "module";
+            import { d } from "other";
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // All valid
+        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_export_named_declaration() {
+        let source = "
+            export { a, b };
+            export { c };
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Valid exports
+        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_export_with_from() {
+        let source = "
+            export { a, b } from \"module\";
+            const x = 1;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_export_default_class() {
+        let source = "
+            export default class Foo {}
+            const x = 1;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_export_default_function() {
+        let source = "
+            export default function foo() {}
+            const x = 1;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_import_namespace() {
+        let source = r#"
+            import * as ns from "module";
+            const x = 1;
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_import_default_and_named() {
+        let source = r#"
+            import React, { useState } from "react";
+            const x = 1;
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.program.body.len(), 2);
+    }
+
+    #[test]
+    fn test_mixed_imports_and_exports() {
+        let source = r#"
+            import { a } from "a";
+            export { b };
+            import { c } from "c";
+            export default class D {}
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.program.body.len(), 4);
+    }
+
+    #[test]
+    fn test_import_with_as_renaming() {
+        let source = r#"
+            import { foo as bar } from "module";
+            const x = 1;
+        "#;
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.program.body.len(), 2);
+    }
 }

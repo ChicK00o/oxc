@@ -64,30 +64,31 @@ impl<'a> ParserImpl<'a> {
         } else {
             None
         };
-        // Allow trailing comma
-        self.bump(Kind::Comma);
 
         // M6.5.3: Error recovery for invalid import() arguments (too many args)
-        if !self.eat(Kind::RParen) {
-            let error_span = self.end_span(span);
-            if self.options.recover_from_errors {
-                self.error(diagnostics::import_arguments(error_span));
-                // Skip extra arguments until we find closing paren or EOF
-                while !self.at(Kind::RParen) && !self.at(Kind::Eof) {
-                    if self.eat(Kind::Comma) {
-                        if !self.at(Kind::RParen) {
-                            let _ = self.parse_assignment_expression_or_higher();
+        // After parsing up to 2 arguments, check for more
+        if self.eat(Kind::Comma) {
+            // Consumed a comma after second arg (or after first if no second arg with comma)
+            if !self.at(Kind::RParen) {
+                // There's another argument - this is an error
+                if self.options.recover_from_errors {
+                    self.error(diagnostics::import_arguments(self.end_span(span)));
+                    // Skip all extra arguments
+                    while !self.at(Kind::RParen) && !self.at(Kind::Eof) {
+                        let _ = self.parse_assignment_expression_or_higher();
+                        if !self.eat(Kind::Comma) {
+                            break;
                         }
-                    } else {
-                        break;
                     }
+                } else {
+                    let error = diagnostics::import_arguments(self.end_span(span));
+                    return self.fatal_error(error);
                 }
-                self.expect(Kind::RParen);
-            } else {
-                let error = diagnostics::import_arguments(error_span);
-                return self.fatal_error(error);
             }
+            // else: trailing comma before ), which is OK
         }
+
+        self.expect(Kind::RParen);
 
         self.ctx = self.ctx.and_in(has_in);
         let expr =
@@ -1032,12 +1033,7 @@ impl<'a> ParserImpl<'a> {
             self.ast.module_export_name_identifier_name(span, Atom::from("__invalid_export__"));
         let exported =
             self.ast.module_export_name_identifier_name(span, Atom::from("__invalid_export__"));
-        ExportSpecifier {
-            span,
-            local,
-            exported,
-            export_kind: ImportOrExportKind::Value,
-        }
+        ExportSpecifier { span, local, exported, export_kind: ImportOrExportKind::Value }
     }
 
     // ImportSpecifier :

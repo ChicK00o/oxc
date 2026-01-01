@@ -1222,6 +1222,275 @@ loop {
 - ✅ Code compiles cleanly (only expected warnings)
 - ✅ All quality checks pass
 
+## M6.5.3: Module Import/Export Error Recovery
+
+**Date**: 2026-01-01
+**Milestone**: M6.5.3
+**Files Modified**:
+- `crates/oxc_parser/src/js/module.rs`
+- `crates/oxc_parser/src/js/expression.rs`
+- `crates/oxc_parser/src/lib.rs` (tests)
+
+**Purpose**: Enable error recovery for module import/export syntax errors to allow continued parsing and type checking even when module declarations contain errors.
+
+### Rationale
+
+Module syntax errors are extremely common during refactoring, code organization, and dependency management. TypeScript compiler (tsc) always recovers from these errors to continue parsing subsequent imports, exports, and declarations. Without recovery, a single import error blocks all subsequent type checking.
+
+**Example**: Invalid import syntax
+
+```typescript
+import();                          // Error: empty import()
+import { valid } from "./other";   // Should still be parsed
+export class MyClass {}            // Should still be parsed
+```
+
+**Without recovery**:
+- Parser terminates at first error
+- Valid imports/exports never seen
+- Type checking blocked entirely
+- IDE experience severely degraded
+
+**With recovery**:
+- Error reported for empty import()
+- Parser continues to subsequent statements
+- All valid imports/exports parsed
+- Type checking proceeds normally
+- Smooth refactoring experience
+
+### Implementations
+
+#### 1. Empty import() Recovery
+
+**Location**: `module.rs:42-57`
+
+**Before**:
+```rust
+if self.eat(Kind::RParen) {
+    let error = diagnostics::import_requires_a_specifier(self.end_span(span));
+    return self.fatal_error(error);
+}
+```
+
+**After**:
+```rust
+if self.eat(Kind::RParen) {
+    let error_span = self.end_span(span);
+    if self.options.recover_from_errors {
+        self.error(diagnostics::import_requires_a_specifier(error_span));
+        // Return dummy import with empty string literal
+        let expression = self.ast.expression_string_literal(
+            error_span,
+            Atom::from(""),
+            None
+        );
+        let expr = self.ast.alloc_import_expression(
+            self.end_span(span),
+            expression,
+            None,
+            phase
+        );
+        self.module_record_builder.visit_import_expression(&expr);
+        return Expression::ImportExpression(expr);
+    }
+    let error = diagnostics::import_requires_a_specifier(error_span);
+    return self.fatal_error(error);
+}
+```
+
+**Strategy**: Creates a dummy import expression with an empty string literal, allowing parsing to continue.
+
+#### 2. Invalid import() Arguments Recovery
+
+**Location**: `module.rs:68-92`
+
+**Handles**: `import(a, b, c)` - too many arguments
+
+**Strategy**: After parsing the allowed 2 arguments, checks for additional arguments. If found, reports error and skips all extra arguments until closing paren.
+
+```rust
+if self.eat(Kind::Comma) {
+    if !self.at(Kind::RParen) {
+        // There's another argument - this is an error
+        if self.options.recover_from_errors {
+            self.error(diagnostics::import_arguments(self.end_span(span)));
+            // Skip all extra arguments
+            while !self.at(Kind::RParen) && !self.at(Kind::Eof) {
+                let _ = self.parse_assignment_expression_or_higher();
+                if !self.eat(Kind::Comma) {
+                    break;
+                }
+            }
+        }
+    }
+}
+```
+
+#### 3. Invalid import.meta Recovery
+
+**Location**: `expression.rs:704-716`
+
+**Handles**: `import.something` where something != meta/source/defer
+
+**Before**:
+```rust
+_ => {
+    self.bump_any();
+    self.fatal_error(diagnostics::import_meta(self.end_span(span)))
+}
+```
+
+**After**:
+```rust
+_ => {
+    self.bump_any();
+    let error_span = self.end_span(span);
+    if self.options.recover_from_errors {
+        self.error(diagnostics::import_meta(error_span));
+        // Return valid import.meta anyway
+        let property = self.ast.identifier_name(error_span, Atom::from("meta"));
+        self.module_record_builder.visit_import_meta(error_span);
+        self.ast.expression_meta_property(error_span, meta, property)
+    } else {
+        self.fatal_error(diagnostics::import_meta(error_span))
+    }
+}
+```
+
+**Strategy**: Skips invalid property name and returns a valid `import.meta` expression.
+
+#### 4. Invalid Import Attribute Values Recovery
+
+**Location**: `module.rs:476-492`
+
+**Handles**: `import "m" with { type: 123 }` - non-string attribute values
+
+**Strategy**: When attribute value is not a string literal, reports error, skips the invalid value, and creates a dummy empty string literal to continue parsing.
+
+```rust
+let value = if self.at(Kind::Str) {
+    self.parse_literal_string()
+} else {
+    let error_span = self.cur_token().span();
+    if self.options.recover_from_errors {
+        self.error(diagnostics::import_attribute_value_must_be_string_literal(error_span));
+        self.bump_any();
+        self.ast.string_literal(error_span, Atom::from(""), None)
+    } else {
+        return self.fatal_error(...)
+    }
+};
+```
+
+#### 5. Unexpected Export Recovery
+
+**Location**: `module.rs:565-581`
+
+**Handles**: Invalid export statements that don't parse correctly
+
+**Strategy**: Reports error and returns an empty export declaration to allow parsing to continue.
+
+### Helper Functions
+
+#### Dummy Import Specifier
+
+**Location**: `module.rs:1002-1014`
+
+```rust
+#[expect(dead_code)]
+fn create_dummy_import_specifier(&self) -> ImportDeclarationSpecifier<'a> {
+    let span = self.cur_token().span();
+    let dummy_name = self.ast.module_export_name_identifier_name(
+        span,
+        Atom::from("__invalid_import__")
+    );
+    let local = self.ast.binding_identifier(
+        span,
+        Atom::from("__invalid_import__")
+    );
+    self.ast.import_declaration_specifier_import_specifier(
+        span,
+        dummy_name,
+        local,
+        ImportOrExportKind::Value,
+    )
+}
+```
+
+**Purpose**: Creates placeholder import specifier for future error recovery scenarios. Marked with `#[expect(dead_code)]` as it's infrastructure for handling complex import specifier list errors.
+
+#### Dummy Export Specifier
+
+**Location**: `module.rs:1028-1038`
+
+**Purpose**: Similar to dummy import specifier, creates placeholder export specifier with `__invalid_export__` name for future error recovery.
+
+### Testing
+
+**Test Count**: 30 comprehensive tests in `lib.rs`
+
+**Categories**:
+1. Empty import() (2 tests)
+2. Invalid import() arguments (3 tests)
+3. Invalid import.meta (2 tests)
+4. Import attributes (3 tests)
+5. Integration scenarios (10 tests)
+6. Named imports/exports (10 tests)
+
+**Key Test Patterns**:
+```rust
+#[test]
+fn test_empty_import_call() {
+    let source = r"
+        import();
+        let x = 5;
+    ";
+    let allocator = Allocator::default();
+    let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+    let ret = Parser::new(&allocator, source, SourceType::default())
+        .with_options(opts)
+        .parse();
+
+    // Error reported
+    assert_eq!(ret.errors.len(), 1);
+    assert!(ret.errors[0].message.contains("import"));
+
+    // Both statements parsed
+    assert_eq!(ret.program.body.len(), 2);
+}
+```
+
+### Error Quality
+
+All recovery implementations ensure:
+- **Clear error messages**: Descriptive messages indicating the specific issue
+- **Accurate spans**: Error locations point to the exact problem token
+- **No cascading errors**: Single module error doesn't generate multiple errors
+- **AST completeness**: All valid subsequent statements parsed correctly
+
+### Performance Impact
+
+- **Zero overhead on valid modules**: Recovery code only executes on errors
+- **Minimal overhead on errors**: Simple dummy node creation and token skipping
+- **All tests pass**: 102 total tests in oxc_parser, all passing
+
+### Integration with M6.5.0 and M6.5.1
+
+This implementation builds on:
+- **M6.5.0**: Context stack and synchronization infrastructure
+- **M6.5.1**: Core error recovery patterns and `recover_from_errors` flag
+
+Import/export specifier lists already use the synchronization infrastructure from M6.5.0 with `ParsingContext::ImportSpecifiers` and `ParsingContext::ExportSpecifiers`.
+
+### Success Metrics
+
+- ✅ 30+ tests passing
+- ✅ All 5 module error types recoverable
+- ✅ Module structure always preserved
+- ✅ Error quality verified
+- ✅ Zero clippy warnings
+- ✅ All parser tests passing (102/102)
+
 ## References
 
 - **OXC Repository**: https://github.com/oxc-project/oxc
@@ -1229,5 +1498,6 @@ loop {
 - **tstc Parser Architecture**: `/docs/parser-architecture.md`
 - **M6.5.0 Milestone**: `/docs/milestones/done/M6.5.0.md`
 - **M6.5.1 Milestone**: `/docs/milestones/done/M6.5.1.md`
-- **M6.5.2 Milestone**: `/docs/milestones/inprogress/M6.5.2.md`
+- **M6.5.2 Milestone**: `/docs/milestones/done/M6.5.2.md`
+- **M6.5.3 Milestone**: `/docs/milestones/inprogress/M6.5.3.md`
 - **Error Recovery Status**: `ERROR_RECOVERY_STATUS.md`
