@@ -2221,15 +2221,36 @@ try { operation(); } catch { handle(); }  // Valid ES2019+
 - ✅ Clean compilation
 - ✅ Documentation complete
 
+#### 5. Orphaned Catch/Finally Detection (COMPLETED)
+
+**File**: `crates/oxc_parser/src/js/statement.rs` (Lines 826-884)
+
+**Implementation**: Orphaned catch and finally clauses are now detected at statement level:
+
+```rust
+Kind::Catch => self.parse_orphaned_catch_clause(),
+Kind::Finally => self.parse_orphaned_finally_clause(),
+```
+
+Both methods:
+- Report appropriate error (catch_without_try or finally_without_try)
+- Skip the clause and its block when recovery is enabled
+- Return empty statement to allow parsing to continue
+
+**New Diagnostics** (diagnostics.rs):
+- `catch_without_try(span)`: "Catch clause requires a preceding try statement"
+- `finally_without_try(span)`: "Finally clause requires a preceding try statement"
+
 ### Future Work
 
-1. **Catch without try detection**: Orphaned catch clauses (rare edge case)
-2. **Finally without try detection**: Orphaned finally clauses (rare edge case)
-3. **Additional statement recovery**: For/while/if condition errors
-4. **Break/continue validation**: Out-of-loop break/continue (semantic check)
+1. **Additional statement recovery**: For/while/if condition errors
+2. **Break/continue validation**: Out-of-loop break/continue (semantic check)
+3. **Comprehensive test suite**: Unit tests for all scenarios (current implementation reuses tested M6.5.0/M6.5.1 infrastructure)
 
 ### Commits
 
-- TBD - M6.5.5: Implement statement & control flow error recovery (OXC submodule)
-- TBD - M6.5.5: Update OXC submodule reference (main project)
+- `852dc8646` - M6.5.5: Implement statement & control flow error recovery (OXC submodule)
+- `4ceb0c3f4` - M6.5.5: Implement catch/finally without try detection (OXC submodule)
+- `e8f7ddf` - M6.5.5: Update OXC submodule reference (main project)
+- `20bff87` - M6.5.5: Mark milestone as complete with task checkoffs (main project)
 
