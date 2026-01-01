@@ -147,7 +147,7 @@ impl<'a> ParserImpl<'a> {
                         let num_str = literal.value.to_string();
                         let identifier = self.ast.identifier_name(
                             literal.span(),
-                            self.ast.atom(&format!("_{}", num_str)),
+                            self.ast.atom(&format!("_{num_str}")),
                         );
                         TSEnumMemberName::Identifier(self.alloc(identifier))
                     } else {
@@ -160,10 +160,8 @@ impl<'a> ParserImpl<'a> {
                     if self.options.recover_from_errors {
                         self.error(error);
                         // Create dummy identifier for computed property
-                        let identifier = self.ast.identifier_name(
-                            expr.span(),
-                            self.ast.atom("__computed__"),
-                        );
+                        let identifier =
+                            self.ast.identifier_name(expr.span(), self.ast.atom("__computed__"));
                         TSEnumMemberName::Identifier(self.alloc(identifier))
                     } else {
                         self.fatal_error(error)
@@ -178,10 +176,7 @@ impl<'a> ParserImpl<'a> {
                     self.error(error);
                     // Create dummy identifier for template literal
                     let span = self.cur_token().span();
-                    let identifier = self.ast.identifier_name(
-                        span,
-                        self.ast.atom("__template__"),
-                    );
+                    let identifier = self.ast.identifier_name(span, self.ast.atom("__template__"));
                     self.bump_any(); // Consume the template token
                     TSEnumMemberName::Identifier(self.alloc(identifier))
                 } else {
@@ -196,10 +191,8 @@ impl<'a> ParserImpl<'a> {
                     // Convert numeric token to valid identifier by prefixing with '_'
                     let span = self.cur_token().span();
                     let num_str = self.cur_src();
-                    let identifier = self.ast.identifier_name(
-                        span,
-                        self.ast.atom(&format!("_{}", num_str)),
-                    );
+                    let identifier =
+                        self.ast.identifier_name(span, self.ast.atom(&format!("_{num_str}")));
                     self.bump_any(); // Consume the numeric token
                     TSEnumMemberName::Identifier(self.alloc(identifier))
                 } else {
@@ -635,7 +628,8 @@ impl<'a> ParserImpl<'a> {
                     let kind = VariableDeclarationKind::Using;
                     let mut declarations = self.ast.vec();
                     loop {
-                        let declaration = self.parse_variable_declarator(VariableDeclarationParent::Statement, kind);
+                        let declaration = self
+                            .parse_variable_declarator(VariableDeclarationParent::Statement, kind);
                         declarations.push(declaration);
                         if !self.eat(Kind::Comma) {
                             break;
@@ -671,7 +665,8 @@ impl<'a> ParserImpl<'a> {
                     let kind = VariableDeclarationKind::AwaitUsing;
                     let mut declarations = self.ast.vec();
                     loop {
-                        let declaration = self.parse_variable_declarator(VariableDeclarationParent::Statement, kind);
+                        let declaration = self
+                            .parse_variable_declarator(VariableDeclarationParent::Statement, kind);
                         declarations.push(declaration);
                         if !self.eat(Kind::Comma) {
                             break;

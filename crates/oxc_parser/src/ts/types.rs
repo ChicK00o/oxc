@@ -1326,13 +1326,11 @@ impl<'a> ParserImpl<'a> {
                 self.error(diagnostics::index_signature_type_annotation(self.end_span(span)));
                 // Create dummy 'any' type
                 let any_span = self.cur_token().span();
-                self.ast.alloc_ts_type_annotation(
-                    any_span,
-                    self.ast.ts_type_any_keyword(any_span),
-                )
+                self.ast.alloc_ts_type_annotation(any_span, self.ast.ts_type_any_keyword(any_span))
             } else {
-                return self
-                    .fatal_error(diagnostics::index_signature_type_annotation(self.end_span(span)));
+                return self.fatal_error(diagnostics::index_signature_type_annotation(
+                    self.end_span(span),
+                ));
             }
         };
         self.parse_type_member_semicolon();
