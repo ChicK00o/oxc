@@ -181,6 +181,8 @@ impl<'a> ParserImpl<'a> {
 
         if self.options.recover_from_errors {
             // Recovery mode: record error but allow parsing to continue
+            #[cfg(debug_assertions)]
+            eprintln!("Recoverable expect failure: {} at {:?}", expected_kind.to_str(), range);
             self.error(error);
         } else {
             // Non-recovery mode: terminate immediately
