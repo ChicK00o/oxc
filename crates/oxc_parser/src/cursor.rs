@@ -162,13 +162,30 @@ impl<'a> ParserImpl<'a> {
     }
 
     /// Cold path for expect failures - separated to improve branch prediction
+    /// Handles failure when an expected token is not found.
+    ///
+    /// **Recovery Behavior**:
+    /// - When `recover_from_errors` is `true`: Records error but does NOT terminate parsing.
+    ///   Caller should use `synchronize_on_error()` if context-specific recovery is needed.
+    /// - When `recover_from_errors` is `false`: Sets fatal error and terminates parsing.
+    ///
+    /// **Why caller handles synchronization**: Different parsing contexts need different
+    /// recovery strategies. This function just records the error; the caller decides whether
+    /// to skip tokens, insert dummy nodes, or abort the current context.
     #[cold]
     #[inline(never)]
     fn handle_expect_failure(&mut self, expected_kind: Kind) {
         let range = self.cur_token().span();
         let error =
             diagnostics::expect_token(expected_kind.to_str(), self.cur_kind().to_str(), range);
-        self.set_fatal_error(error);
+
+        if self.options.recover_from_errors {
+            // Recovery mode: record error but allow parsing to continue
+            self.error(error);
+        } else {
+            // Non-recovery mode: terminate immediately
+            self.set_fatal_error(error);
+        }
     }
 
     /// # Errors
@@ -189,6 +206,12 @@ impl<'a> ParserImpl<'a> {
         self.advance(kind);
     }
 
+    /// Expect a closing delimiter (e.g., `]`, `)`, `}`) or record error.
+    ///
+    /// **Recovery Behavior**:
+    /// - When `recover_from_errors` is `true`: Records error but allows parsing to continue.
+    ///   Caller should use `synchronize_on_error()` for context-specific recovery.
+    /// - When `recover_from_errors` is `false`: Sets fatal error and terminates parsing.
     #[inline]
     pub(crate) fn expect_closing(&mut self, kind: Kind, opening_span: Span) {
         if !self.at(kind) {
@@ -199,11 +222,23 @@ impl<'a> ParserImpl<'a> {
                 range,
                 opening_span,
             );
-            self.set_fatal_error(error);
+
+            if self.options.recover_from_errors {
+                // Recovery mode: record error but allow parsing to continue
+                self.error(error);
+            } else {
+                // Non-recovery mode: terminate immediately
+                self.set_fatal_error(error);
+            }
         }
         self.advance(kind);
     }
 
+    /// Expect the `:` in a conditional expression (`? ... : ...`).
+    ///
+    /// **Recovery Behavior**:
+    /// - When `recover_from_errors` is `true`: Records error but allows parsing to continue.
+    /// - When `recover_from_errors` is `false`: Sets fatal error and terminates parsing.
     #[inline]
     pub(crate) fn expect_conditional_alternative(&mut self, question_span: Span) {
         if !self.at(Kind::Colon) {
@@ -213,7 +248,14 @@ impl<'a> ParserImpl<'a> {
                 range,
                 question_span,
             );
-            self.set_fatal_error(error);
+
+            if self.options.recover_from_errors {
+                // Recovery mode: record error but allow parsing to continue
+                self.error(error);
+            } else {
+                // Non-recovery mode: terminate immediately
+                self.set_fatal_error(error);
+            }
         }
         self.bump_any(); // bump `:`
     }
