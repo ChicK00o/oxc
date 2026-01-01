@@ -803,10 +803,19 @@ impl<'a> ParserImpl<'a> {
 
         let finalizer = self.eat(Kind::Finally).then(|| self.parse_block());
 
-        if handler.is_none() && finalizer.is_none() {
+        let handler = if handler.is_none() && finalizer.is_none() {
             let range = Span::empty(block.span.end);
             self.error(diagnostics::expect_catch_finally(range));
-        }
+
+            // Error recovery: create dummy catch clause to allow parsing to continue
+            if self.options.recover_from_errors {
+                Some(self.create_dummy_catch_clause(range))
+            } else {
+                None
+            }
+        } else {
+            handler
+        };
 
         self.ast.statement_try(self.end_span(span), block, handler, finalizer)
     }
@@ -815,7 +824,32 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         self.bump_any(); // advance `catch`
         let pattern = if self.eat(Kind::LParen) {
-            let (pattern, type_annotation) = self.parse_binding_pattern_with_type_annotation();
+            let param_span = self.start_span();
+            // Try to parse binding pattern, use dummy on error
+            let (pattern, type_annotation) = if self.options.recover_from_errors {
+                // Check for invalid catch parameter (e.g., numeric literals, etc.)
+                if !matches!(
+                    self.cur_kind(),
+                    Kind::Ident | Kind::LCurly | Kind::LBrack | Kind::RParen
+                ) {
+                    // Invalid catch parameter - create error and dummy parameter
+                    self.error(diagnostics::expect_catch_parameter(self.cur_token().span()));
+                    // Skip invalid tokens until we find RParen or valid pattern start
+                    while !self.at(Kind::RParen) && !self.at(Kind::Eof) {
+                        self.bump_any();
+                    }
+                    let dummy_pattern =
+                        self.create_dummy_catch_parameter(self.end_span(param_span)).pattern;
+                    (dummy_pattern, None)
+                } else if self.at(Kind::RParen) {
+                    // Empty catch parameter (ES2019+ optional binding is valid)
+                    (self.parse_binding_pattern_with_type_annotation().0, None)
+                } else {
+                    self.parse_binding_pattern_with_type_annotation()
+                }
+            } else {
+                self.parse_binding_pattern_with_type_annotation()
+            };
             self.expect(Kind::RParen);
             Some((pattern, type_annotation))
         } else {
@@ -900,5 +934,23 @@ impl<'a> ParserImpl<'a> {
             return self.parse_class_statement(span, stmt_ctx, &modifiers, decorators);
         }
         self.unexpected()
+    }
+
+    /// Helper function to create a dummy empty catch clause for error recovery.
+    /// Used when a try statement is missing both catch and finally clauses.
+    #[expect(clippy::needless_pass_by_ref_mut, reason = "AST builder requires mutable access")]
+    fn create_dummy_catch_clause(&mut self, span: Span) -> Box<'a, CatchClause<'a>> {
+        let body = self.ast.block_statement(span, self.ast.vec());
+        self.ast.alloc_catch_clause(span, None, body)
+    }
+
+    /// Helper function to create a dummy catch parameter for error recovery.
+    /// Creates a simple identifier pattern named "e" when catch parameter parsing fails.
+    #[expect(clippy::needless_pass_by_ref_mut, reason = "AST builder requires mutable access")]
+    fn create_dummy_catch_parameter(&mut self, span: Span) -> CatchParameter<'a> {
+        let binding_identifier = self.ast.alloc(self.ast.binding_identifier(span, Atom::from("e")));
+        let pattern = BindingPattern::BindingIdentifier(binding_identifier);
+        let type_annotation: Option<Box<TSTypeAnnotation>> = None;
+        self.ast.catch_parameter(span, pattern, type_annotation)
     }
 }

@@ -145,10 +145,9 @@ impl<'a> ParserImpl<'a> {
                         self.error(error);
                         // Convert numeric literal to valid identifier by prefixing with '_'
                         let num_str = literal.value.to_string();
-                        let identifier = self.ast.identifier_name(
-                            literal.span(),
-                            self.ast.atom(&format!("_{num_str}")),
-                        );
+                        let identifier = self
+                            .ast
+                            .identifier_name(literal.span(), self.ast.atom(&format!("_{num_str}")));
                         TSEnumMemberName::Identifier(self.alloc(identifier))
                     } else {
                         self.fatal_error(error)

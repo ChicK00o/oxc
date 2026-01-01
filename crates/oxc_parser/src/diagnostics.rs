@@ -616,6 +616,13 @@ pub fn expect_catch_finally(span: Span) -> OxcDiagnostic {
 }
 
 #[cold]
+pub fn expect_catch_parameter(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("Invalid catch clause parameter")
+        .with_label(span)
+        .with_help("Catch parameter must be an identifier or destructuring pattern")
+}
+
+#[cold]
 pub fn v8_intrinsic_spread_elem(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("V8 runtime calls cannot have spread elements as arguments")
         .with_label(span)

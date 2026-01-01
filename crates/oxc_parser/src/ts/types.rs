@@ -1443,11 +1443,11 @@ impl<'a> ParserImpl<'a> {
     ///
     /// # Returns
     /// A type annotation containing a TSAnyKeyword type
-    pub(crate) fn create_dummy_any_type(&mut self, span: oxc_span::Span) -> Box<'a, TSTypeAnnotation<'a>> {
-        self.ast.alloc_ts_type_annotation(
-            span,
-            self.ast.ts_type_any_keyword(span),
-        )
+    pub(crate) fn create_dummy_any_type(
+        &mut self,
+        span: oxc_span::Span,
+    ) -> Box<'a, TSTypeAnnotation<'a>> {
+        self.ast.alloc_ts_type_annotation(span, self.ast.ts_type_any_keyword(span))
     }
 
     /// Create a dummy 'unknown' type annotation for error recovery (stricter alternative).
@@ -1465,10 +1465,10 @@ impl<'a> ParserImpl<'a> {
     /// Currently unused but provided for cases where stricter recovery is preferred.
     /// TSC typically uses `any` for recovery, so this matches their behavior.
     #[expect(dead_code)]
-    pub(crate) fn create_dummy_unknown_type(&mut self, span: oxc_span::Span) -> Box<'a, TSTypeAnnotation<'a>> {
-        self.ast.alloc_ts_type_annotation(
-            span,
-            self.ast.ts_type_unknown_keyword(span),
-        )
+    pub(crate) fn create_dummy_unknown_type(
+        &mut self,
+        span: oxc_span::Span,
+    ) -> Box<'a, TSTypeAnnotation<'a>> {
+        self.ast.alloc_ts_type_annotation(span, self.ast.ts_type_unknown_keyword(span))
     }
 }
