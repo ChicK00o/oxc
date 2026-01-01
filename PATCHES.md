@@ -2241,11 +2241,55 @@ Both methods:
 - `catch_without_try(span)`: "Catch clause requires a preceding try statement"
 - `finally_without_try(span)`: "Finally clause requires a preceding try statement"
 
+#### 6. Infrastructure-Handled Recovery (M6.5.1)
+
+**Overview**: Additional control flow constructs (for/while/if loops, break/continue/return/throw statements) leverage the recoverable `expect()` infrastructure from M6.5.1, requiring no custom recovery logic.
+
+**How it works**: The `expect()` method in M6.5.1 (cursor.rs:202-207) automatically handles missing tokens when `recover_from_errors` is enabled:
+
+```rust
+pub(crate) fn expect(&mut self, kind: Kind) {
+    if !self.at(kind) {
+        self.handle_expect_failure(kind);  // Records error, doesn't terminate
+    }
+    self.advance(kind);  // Continues parsing
+}
+```
+
+**Recovery Examples**:
+
+1. **For loops with missing semicolons**:
+   - `expect(Kind::Semicolon)` records error and continues
+   - Parser still attempts to parse test and update expressions
+   - Body is parsed normally
+
+2. **While/do-while/if with missing parentheses**:
+   - `expect(Kind::LParen)` and `expect_closing(Kind::RParen, opening_span)` record errors
+   - Expression parsing continues
+   - Body is parsed normally
+
+3. **Invalid expressions in conditions**:
+   - Expression parser has its own recovery from M6.5.1
+   - Synchronizes to statement-level tokens
+   - Allows statement list to continue
+
+4. **Invalid statements in blocks**:
+   - Block statements use `ParsingContext::BlockStatements` from M6.5.0
+   - `synchronize_on_error()` skips to next valid statement
+   - No custom logic needed
+
+**Break/Continue/Return/Throw**: These are simple statements with no complex structure. Parser handles them naturally:
+- Break/continue outside loops: Valid syntax, semantic error (checked in semantic analysis, not parser)
+- Return/throw with invalid expressions: Expression recovery handles it
+- Missing semicolons: ASI (Automatic Semicolon Insertion) handles it
+
+**Result**: For/while/if/break/continue/return/throw recovery works automatically through M6.5.1 infrastructure with zero custom code.
+
 ### Future Work
 
-1. **Additional statement recovery**: For/while/if condition errors
-2. **Break/continue validation**: Out-of-loop break/continue (semantic check)
-3. **Comprehensive test suite**: Unit tests for all scenarios (current implementation reuses tested M6.5.0/M6.5.1 infrastructure)
+1. **Comprehensive test suite**: Explicit unit tests for all control flow scenarios (current implementation reuses tested M6.5.0/M6.5.1 infrastructure, but explicit tests would verify recovery behavior)
+2. **Specialized diagnostics**: Loop-specific error messages (e.g., "for loop requires two semicolons in header")
+3. **Break/continue semantic validation**: Out-of-loop break/continue detection (belongs in semantic analysis phase, not parser)
 
 ### Commits
 

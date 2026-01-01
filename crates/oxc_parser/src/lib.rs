@@ -1591,6 +1591,6 @@ mod test {
         let ret = parser.parse();
 
         // Should still report error (but may not parse everything)
-        assert!(ret.errors.len() >= 1, "Should have at least 1 error");
+        assert!(!ret.errors.is_empty(), "Should have at least 1 error");
     }
 }

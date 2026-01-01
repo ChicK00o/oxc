@@ -2,15 +2,17 @@
 //! Tests index signatures, enum members, and using declarations
 
 use oxc_allocator::Allocator;
-use oxc_parser::{Parser, ParserReturn};
+use oxc_parser::{ParseOptions, Parser, ParserReturn};
 use oxc_span::SourceType;
 
 fn parse_with_recovery(source: &str) -> ParserReturn {
     let allocator = Allocator::default();
     let source_type = SourceType::tsx();
-    let mut parser = Parser::new(&allocator, source, source_type);
-    parser.options.recover_from_errors = true;
-    parser.parse()
+    let options = ParseOptions {
+        recover_from_errors: true,
+        ..ParseOptions::default()
+    };
+    Parser::new(&allocator, source, source_type).with_options(options).parse()
 }
 
 // ==================== Index Signature Tests ====================
@@ -252,7 +254,9 @@ fn test_using_declaration_export() {
 
     // Should have 1 error for export using
     assert_eq!(result.errors.len(), 1);
-    assert!(result.errors[0].message.contains("exported") || result.errors[0].message.contains("using"));
+    assert!(
+        result.errors[0].message.contains("exported") || result.errors[0].message.contains("using")
+    );
 
     // Should have 2 statements (using declaration + let)
     assert_eq!(result.program.body.len(), 2);
@@ -269,7 +273,9 @@ fn test_await_using_declaration_export() {
 
     // Should have 1 error for export await using
     assert_eq!(result.errors.len(), 1);
-    assert!(result.errors[0].message.contains("exported") || result.errors[0].message.contains("using"));
+    assert!(
+        result.errors[0].message.contains("exported") || result.errors[0].message.contains("using")
+    );
 
     // Should have 2 statements
     assert_eq!(result.program.body.len(), 2);
@@ -374,9 +380,7 @@ fn test_recovery_without_flag() {
     // Parse WITHOUT recovery flag
     let allocator = Allocator::default();
     let source_type = SourceType::tsx();
-    let mut parser = Parser::new(&allocator, source, source_type);
-    parser.options.recover_from_errors = false;
-    let result = parser.parse();
+    let result = Parser::new(&allocator, source, source_type).parse();
 
     // Should still report error
     assert!(result.errors.len() >= 1);

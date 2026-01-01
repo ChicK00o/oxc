@@ -1443,6 +1443,7 @@ impl<'a> ParserImpl<'a> {
     ///
     /// # Returns
     /// A type annotation containing a TSAnyKeyword type
+    #[expect(clippy::needless_pass_by_ref_mut, reason = "AST builder requires mutable access")]
     pub(crate) fn create_dummy_any_type(
         &mut self,
         span: oxc_span::Span,
@@ -1465,6 +1466,7 @@ impl<'a> ParserImpl<'a> {
     /// Currently unused but provided for cases where stricter recovery is preferred.
     /// TSC typically uses `any` for recovery, so this matches their behavior.
     #[expect(dead_code)]
+    #[expect(clippy::needless_pass_by_ref_mut, reason = "AST builder requires mutable access")]
     pub(crate) fn create_dummy_unknown_type(
         &mut self,
         span: oxc_span::Span,
