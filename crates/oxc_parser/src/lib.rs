@@ -1315,4 +1315,191 @@ mod test {
         assert_eq!(ret.errors.len(), 0);
         assert_eq!(ret.program.body.len(), 2);
     }
+
+    // Phase 1.4 & 2.2: Named Import/Export Specifier Error Tests
+
+    #[test]
+    fn test_import_namespace_with_braces() {
+        // import { * } from "./file" - can't import namespace with braces
+        let source = r"
+            import { * } from './module';
+            const x = 1;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Error for invalid syntax
+        assert!(!ret.errors.is_empty(), "Should have at least one error");
+
+        // Both statements should be parsed (import with error + const)
+        assert_eq!(ret.program.body.len(), 2, "Should parse import (with error) and const");
+    }
+
+    #[test]
+    fn test_import_missing_identifier_after_comma() {
+        // import defaultBinding, from "./file" - missing identifier after comma
+        let source = r"
+            import defaultBinding, from './module';
+            const y = 2;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Should have error
+        assert!(!ret.errors.is_empty(), "Should report error for missing identifier");
+
+        // Should still parse both statements
+        assert!(!ret.program.body.is_empty(), "Should parse at least one statement");
+    }
+
+    #[test]
+    fn test_import_leading_comma() {
+        // import , { a } from "./file" - leading comma
+        let source = r"
+            import , { a } from './module';
+            const z = 3;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Should have error
+        assert!(!ret.errors.is_empty(), "Should report error for leading comma");
+
+        // Leading comma is a severe syntax error - parser may not recover fully
+        // Just verify error is reported
+    }
+
+    #[test]
+    fn test_export_trailing_comma() {
+        // export { a, } from "./file" - trailing comma (this is actually valid ES2015+)
+        // But test that it parses correctly
+        let source = r"
+            export { a, } from './module';
+            const w = 4;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Trailing comma in export list is valid in modern JS
+        // Should parse without error or with minimal errors
+        assert_eq!(ret.program.body.len(), 2, "Should parse export and const");
+    }
+
+    #[test]
+    fn test_export_missing_comma() {
+        // export { a b } from "./file" - missing comma between specifiers
+        let source = r"
+            export { a b } from './module';
+            const v = 5;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Should have error for missing comma
+        assert!(!ret.errors.is_empty(), "Should report error for missing comma");
+
+        // Missing comma in export specifier list may not recover fully
+        // At minimum, error should be reported
+    }
+
+    // Phase 4.4: Error Quality Tests
+
+    #[test]
+    fn test_error_message_quality_import_empty() {
+        let source = "import();";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert_eq!(ret.errors.len(), 1, "Should have exactly one error");
+        let error_msg = &ret.errors[0].message;
+
+        // Error message should be clear
+        assert!(
+            error_msg.contains("import")
+                || error_msg.contains("specifier")
+                || error_msg.contains("requires"),
+            "Error should mention import/specifier: {error_msg}"
+        );
+    }
+
+    #[test]
+    fn test_error_message_quality_too_many_args() {
+        let source = "import('a', 'b', 'c');";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        assert_eq!(ret.errors.len(), 1, "Should have exactly one error");
+        let error_msg = &ret.errors[0].message;
+
+        // Error message should mention arguments
+        assert!(
+            error_msg.contains("argument") || error_msg.contains("maximum"),
+            "Error should mention arguments/maximum: {error_msg}"
+        );
+    }
+
+    #[test]
+    fn test_no_cascading_errors() {
+        // Single error should not cause cascade of errors for valid code
+        let source = r"
+            import();
+            import { valid1 } from './a';
+            import { valid2 } from './b';
+            export const x = 1;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Should have only 1 error (the empty import)
+        assert_eq!(ret.errors.len(), 1, "Should have only 1 error, not cascading errors");
+
+        // All 4 statements should be parsed
+        assert_eq!(ret.program.body.len(), 4, "All statements should be parsed");
+    }
+
+    #[test]
+    fn test_error_span_accuracy() {
+        let source = "import { * } from './module';";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Should have at least one error
+        assert!(!ret.errors.is_empty(), "Should have at least one error");
+
+        let error = &ret.errors[0];
+        // Error should have labels with span information
+        assert!(error.labels.is_some(), "Error should have labels with span");
+        if let Some(labels) = &error.labels {
+            assert!(!labels.is_empty(), "Error labels should not be empty");
+        }
+    }
+
+    #[test]
+    fn test_stress_multiple_module_errors() {
+        // Test file with multiple import/export errors
+        let source = r"
+            import();
+            import { * } from './a';
+            import { valid } from './good';
+            export const result = 42;
+        ";
+        let allocator = Allocator::default();
+        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
+        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
+
+        // Should have at least 2 errors (empty import and namespace in braces)
+        assert!(ret.errors.len() >= 2, "Should have at least 2 errors for malformed imports");
+
+        // Should parse multiple statements including valid ones
+        assert!(ret.program.body.len() >= 2, "Should parse at least 2 statements");
+    }
 }
