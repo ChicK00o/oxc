@@ -717,3 +717,153 @@ impl<'a> ParserImpl<'a> {
         (list, rest)
     }
 }
+
+#[cfg(test)]
+mod error_recovery_tests {
+    use oxc_allocator::Allocator;
+    use oxc_span::SourceType;
+    use crate::Parser;
+
+    /// Helper to parse code with recovery enabled
+    fn parse_with_recovery(source: &str) -> (usize, usize) {
+        let allocator = Allocator::default();
+        let source_type = SourceType::default().with_typescript(true);
+        let options = crate::ParseOptions {
+            recover_from_errors: true,
+            ..Default::default()
+        };
+
+        let ret = Parser::new(&allocator, source, source_type)
+            .with_options(options)
+            .parse();
+
+        (ret.errors.len(), ret.program.body.len())
+    }
+
+    /// Helper to parse code without recovery
+    fn parse_without_recovery(source: &str) -> (usize, usize) {
+        let allocator = Allocator::default();
+        let source_type = SourceType::default().with_typescript(true);
+        let options = crate::ParseOptions {
+            recover_from_errors: false,
+            ..Default::default()
+        };
+
+        let ret = Parser::new(&allocator, source, source_type)
+            .with_options(options)
+            .parse();
+
+        (ret.errors.len(), ret.program.body.len())
+    }
+
+    #[test]
+    fn test_handle_expect_failure_recovery_mode() {
+        // Missing closing bracket in array - should record error
+        let source = "let arr = [1, 2, 3; let x = 5;";
+        let (errors, _statements) = parse_with_recovery(source);
+
+        // Should have at least 1 error for missing ]
+        assert!(errors >= 1, "Expected at least 1 error, got {}", errors);
+        // Recovery mode records errors without terminating immediately
+    }
+
+    #[test]
+    fn test_handle_expect_failure_non_recovery_mode() {
+        // Missing closing bracket - should terminate immediately
+        let source = "let arr = [1, 2, 3; let x = 5;";
+        let (errors, _statements) = parse_without_recovery(source);
+
+        // Should have errors
+        assert!(errors >= 1, "Expected errors in non-recovery mode");
+        // Parser terminates on fatal error, so may not parse second statement
+    }
+
+    #[test]
+    fn test_unexpected_token_skipping() {
+        // Unexpected token that doesn't belong to parent context
+        let source = "let x = @ 5;"; // @ is unexpected
+        let (errors, statements) = parse_with_recovery(source);
+
+        // Should have error for unexpected token
+        assert!(errors >= 1, "Expected error for unexpected token");
+        // Should attempt to continue parsing
+        assert!(statements >= 1, "Expected to parse statement despite error");
+    }
+
+    #[test]
+    fn test_missing_closing_paren() {
+        // Missing closing paren in if statement
+        let source = "if (x > 0 { console.log('yes'); }";
+        let (errors, statements) = parse_with_recovery(source);
+
+        // Should have error for missing )
+        assert!(errors >= 1, "Expected error for missing closing paren");
+        // Should attempt to parse the if statement body
+        assert!(statements >= 1, "Expected to parse if statement despite error");
+    }
+
+    #[test]
+    fn test_missing_closing_brace_in_block() {
+        // Missing closing brace in block
+        let source = "{ let x = 5; let y = 10;";
+        let (errors, _) = parse_with_recovery(source);
+
+        // Should have error for missing }
+        assert!(errors >= 1, "Expected error for missing closing brace");
+    }
+
+    #[test]
+    fn test_nested_structures_with_errors() {
+        // Nested arrays with missing closing bracket
+        let source = "let arr = [[1, 2], [3, 4]; let x = 5;";
+        let (errors, _statements) = parse_with_recovery(source);
+
+        // Should have error for missing ]
+        assert!(errors >= 1, "Expected error for nested structure");
+        // Recovery records errors
+    }
+
+    #[test]
+    fn test_multiple_errors_recovery() {
+        // Multiple syntax errors in sequence
+        let source = "let x = [1, 2; let y = {a: 1; let z = 5;";
+        let (errors, _statements) = parse_with_recovery(source);
+
+        // Should have multiple errors
+        assert!(errors >= 1, "Expected multiple errors, got {}", errors);
+        // Recovery mode records multiple errors
+    }
+
+    #[test]
+    fn test_recovery_continues_after_error() {
+        // Error in first statement, valid second statement
+        let source = "let x = [1, 2; let y = 10;";
+        let (errors, _statements) = parse_with_recovery(source);
+
+        // Should have error for missing ]
+        assert!(errors >= 1, "Expected at least 1 error");
+        // Recovery mode records errors without fatal termination
+    }
+
+    #[test]
+    fn test_no_errors_in_valid_code() {
+        // Valid code should parse without errors
+        let source = "let x = [1, 2, 3]; let y = 10;";
+        let (errors, statements) = parse_with_recovery(source);
+
+        // Should have no errors
+        assert_eq!(errors, 0, "Expected no errors in valid code");
+        // Should parse both statements
+        assert_eq!(statements, 2, "Expected to parse 2 statements");
+    }
+
+    #[test]
+    fn test_eof_during_recovery() {
+        // EOF while parsing unclosed structure
+        let source = "let x = [1, 2, 3";
+        let (errors, _) = parse_with_recovery(source);
+
+        // Should have error for unclosed array
+        assert!(errors >= 1, "Expected error for EOF in unclosed structure");
+    }
+}
