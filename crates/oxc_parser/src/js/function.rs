@@ -86,12 +86,12 @@ impl<'a> ParserImpl<'a> {
         opening_span: Span,
     ) -> (oxc_allocator::Vec<'a, FormalParameter<'a>>, Option<Box<'a, FormalParameterRest<'a>>>)
     {
+        // Safeguard: prevent infinite loops in error recovery
+        const MAX_PARAMETERS: usize = 1000;
+
         let mut list = self.ast.vec();
         let mut rest: Option<Box<'a, FormalParameterRest<'a>>> = None;
         let mut first = true;
-
-        // Safeguard: prevent infinite loops in error recovery
-        const MAX_PARAMETERS: usize = 1000;
         let mut param_count = 0;
 
         loop {
@@ -206,7 +206,7 @@ impl<'a> ParserImpl<'a> {
     /// list.push(dummy);
     /// ```
     #[expect(dead_code, reason = "Reserved for future error recovery scenarios")]
-    fn create_dummy_parameter(&mut self) -> FormalParameter<'a> {
+    fn create_dummy_parameter(&self) -> FormalParameter<'a> {
         let span = self.cur_token().span();
 
         // Create identifier binding: __invalid_param__
