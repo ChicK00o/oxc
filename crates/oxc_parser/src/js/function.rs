@@ -90,7 +90,19 @@ impl<'a> ParserImpl<'a> {
         let mut rest: Option<Box<'a, FormalParameterRest<'a>>> = None;
         let mut first = true;
 
+        // Safeguard: prevent infinite loops in error recovery
+        const MAX_PARAMETERS: usize = 1000;
+        let mut param_count = 0;
+
         loop {
+            // Safety check: prevent infinite loop on malformed input
+            if param_count >= MAX_PARAMETERS {
+                if self.options.recover_from_errors {
+                    self.error(diagnostics::unexpected_token(self.cur_token().span()));
+                }
+                break;
+            }
+            param_count += 1;
             let kind = self.cur_kind();
             if kind == Kind::RParen
                 || matches!(kind, Kind::Eof | Kind::Undetermined)
@@ -172,6 +184,46 @@ impl<'a> ParserImpl<'a> {
         }
 
         (list, rest)
+    }
+
+    /// Creates a dummy parameter for error recovery.
+    ///
+    /// When parameter parsing fails completely and recovery cannot proceed normally,
+    /// this function creates a placeholder parameter with the name `__invalid_param__`.
+    /// This allows the AST to remain complete and parsing to continue.
+    ///
+    /// # Returns
+    /// A `FormalParameter` with:
+    /// - Pattern: Binding identifier `__invalid_param__`
+    /// - No type annotation
+    /// - No initializer
+    /// - Not a rest parameter
+    ///
+    /// # Example Usage
+    /// ```ignore
+    /// // When encountering completely malformed parameter syntax:
+    /// let dummy = self.create_dummy_parameter();
+    /// list.push(dummy);
+    /// ```
+    #[expect(dead_code, reason = "Reserved for future error recovery scenarios")]
+    fn create_dummy_parameter(&mut self) -> FormalParameter<'a> {
+        let span = self.cur_token().span();
+
+        // Create identifier binding: __invalid_param__
+        let pattern =
+            self.ast.binding_pattern_binding_identifier(span, self.ast.atom("__invalid_param__"));
+
+        self.ast.formal_parameter(
+            span,
+            self.ast.vec(), // No decorators
+            pattern,
+            Option::<Box<'a, TSTypeAnnotation>>::None, // No type annotation
+            Option::<Box<'a, Expression>>::None,       // No initializer
+            false,                                     // Not optional
+            Option::<TSAccessibility>::None,           // No accessibility
+            false,                                     // Not readonly
+            false,                                     // Not override
+        )
     }
 
     fn parse_formal_parameter(&mut self, func_kind: FunctionKind) -> FormalParameter<'a> {
@@ -264,7 +316,7 @@ impl<'a> ParserImpl<'a> {
         let type_parameters = self.parse_ts_type_parameters();
         let (this_param, params) = self.parse_formal_parameters(func_kind, param_kind);
         let return_type = if self.is_ts { self.parse_ts_return_type_annotation() } else { None };
-        let body = if self.at(Kind::LCurly) || func_kind == FunctionKind::Expression {
+        let mut body = if self.at(Kind::LCurly) || func_kind == FunctionKind::Expression {
             Some(self.parse_function_body())
         } else {
             None
@@ -272,7 +324,20 @@ impl<'a> ParserImpl<'a> {
         self.ctx =
             self.ctx.and_in(ctx.has_in()).and_await(ctx.has_await()).and_yield(ctx.has_yield());
         if (!self.is_ts || matches!(func_kind, FunctionKind::ObjectMethod)) && body.is_none() {
-            return self.fatal_error(diagnostics::expect_function_body(self.end_span(span)));
+            // Error recovery: create empty function body if missing
+            if self.options.recover_from_errors {
+                let body_span = self.end_span(span);
+                self.error(diagnostics::expect_function_body(body_span));
+
+                // Create an empty function body as a dummy to allow parsing to continue
+                body = Some(self.ast.alloc_function_body(
+                    body_span,
+                    self.ast.vec(), // Empty directives
+                    self.ast.vec(), // Empty statements
+                ));
+            } else {
+                return self.fatal_error(diagnostics::expect_function_body(self.end_span(span)));
+            }
         }
         let function_type = match func_kind {
             FunctionKind::Declaration | FunctionKind::DefaultExport => {
