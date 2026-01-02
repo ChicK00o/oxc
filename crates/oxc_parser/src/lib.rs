@@ -554,8 +554,14 @@ impl<'a> ParserImpl<'a> {
         self.token = self.lexer.first_token();
 
         let hashbang = self.parse_hashbang();
-        let (directives, statements) =
+
+        // M6.5.6 Out of Scope: Parse directives and check for strict mode
+        let (directives, statements, has_use_strict) =
             self.parse_directives_and_statements(/* is_top_level */ true);
+
+        // M6.5.6 Out of Scope: Track program-level strict mode
+        // This would be used for semantic analysis
+        let _ = has_use_strict;
 
         let span = Span::new(0, self.source_text.len() as u32);
         let comments = self.ast.vec_from_iter(self.lexer.trivia_builder.comments.iter().copied());

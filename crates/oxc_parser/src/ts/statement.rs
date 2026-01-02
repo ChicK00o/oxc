@@ -507,8 +507,11 @@ impl<'a> ParserImpl<'a> {
     fn parse_ts_module_block(&mut self) -> Box<'a, TSModuleBlock<'a>> {
         let span = self.start_span();
         self.expect(Kind::LCurly);
-        let (directives, statements) =
+        // M6.5.6 Out of Scope: Parse directives and check for strict mode
+        let (directives, statements, has_use_strict) =
             self.parse_directives_and_statements(/* is_top_level */ false);
+        // M6.5.6 Out of Scope: Track strict mode in TS module blocks
+        let _ = has_use_strict;
         self.expect(Kind::RCurly);
         self.ast.alloc_ts_module_block(self.end_span(span), directives, statements)
     }

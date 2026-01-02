@@ -225,6 +225,14 @@ pub fn invalid_number(x0: &str, span1: Span) -> OxcDiagnostic {
     OxcDiagnostic::error(format!("Invalid Number {x0}")).with_label(span1)
 }
 
+// M6.5.6 Out of Scope: Legacy octal literals in strict mode
+#[cold]
+pub fn legacy_octal(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("Legacy octal literals are not allowed in strict mode")
+        .with_label(span)
+        .with_help("Use the modern octal syntax '0o' instead (e.g., 0o777)")
+}
+
 #[cold]
 pub fn escaped_keyword(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("Keywords cannot contain escape characters").with_label(span)

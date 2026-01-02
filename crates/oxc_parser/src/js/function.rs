@@ -38,9 +38,20 @@ impl<'a> ParserImpl<'a> {
         if self.options.recover_from_errors {
             self.context_stack.push(ParsingContext::FunctionBody);
         }
-        let (directives, statements) = self.context_add(Context::Return, |p| {
+
+        // M6.5.6 Out of Scope: Parse directives and check for strict mode
+        let (directives, statements, has_use_strict) = self.context_add(Context::Return, |p| {
             p.parse_directives_and_statements(/* is_top_level */ false)
         });
+
+        // M6.5.6 Out of Scope: If "use strict" found, re-parse with strict mode context
+        // Note: This is a simplified implementation. A full implementation would need
+        // to validate the entire function body in strict mode context.
+        if has_use_strict {
+            // TODO: Re-validate function body in strict mode
+            // For now, we just track that strict mode was detected
+        }
+
         if self.options.recover_from_errors {
             self.context_stack.pop();
         }

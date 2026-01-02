@@ -168,6 +168,13 @@ impl<'a> ParserImpl<'a> {
                 looks_like_yield_expression,
             ));
         }
+        // M6.5.6 Out of Scope: Strict mode contextual keywords
+        // In strict mode, these become reserved words: let, static, implements, interface,
+        // package, private, protected, public
+        if ctx.has_strict_mode() && kind.is_strict_mode_contextual_keyword() {
+            let keyword_str = kind.to_str();
+            self.error(diagnostics::identifier_reserved_word(span, keyword_str));
+        }
     }
 
     /// Section [PrivateIdentifier](https://tc39.es/ecma262/#prod-PrivateIdentifier)
@@ -362,6 +369,18 @@ impl<'a> ParserImpl<'a> {
         let kind = token.kind();
         let src = self.cur_src();
         let has_separator = token.has_separator();
+
+        // M6.5.6 Out of Scope: Legacy octal literals are not allowed in strict mode
+        // Legacy octal: 0777 (starts with 0, followed by digits, no 'o'/'O')
+        // Modern octal: 0o777 or 0O777 (allowed in strict mode)
+        if self.ctx.has_strict_mode() && kind == Kind::Octal {
+            let bytes = src.as_bytes();
+            // Check if it's a legacy octal (no 'o' or 'O' after the leading '0')
+            if bytes.len() > 1 && bytes[0] == b'0' && bytes[1] != b'o' && bytes[1] != b'O' {
+                self.error(diagnostics::legacy_octal(span));
+            }
+        }
+
         let value = match kind {
             Kind::Decimal | Kind::Binary | Kind::Octal | Kind::Hex => {
                 parse_int(src, kind, has_separator)

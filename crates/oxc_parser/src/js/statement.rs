@@ -34,9 +34,10 @@ impl<'a> ParserImpl<'a> {
     pub(crate) fn parse_directives_and_statements(
         &mut self,
         is_top_level: bool,
-    ) -> (Vec<'a, Directive<'a>>, Vec<'a, Statement<'a>>) {
+    ) -> (Vec<'a, Directive<'a>>, Vec<'a, Statement<'a>>, bool) {
         let mut directives = self.ast.vec();
         let mut statements = self.ast.vec();
+        let mut has_use_strict = false;
 
         let stmt_ctx = if is_top_level {
             StatementContext::TopLevelStatementList
@@ -62,6 +63,15 @@ impl<'a> ParserImpl<'a> {
                     if expr.span.start == string.span.start {
                         let src = &self.source_text
                             [string.span.start as usize + 1..string.span.end as usize - 1];
+
+                        // M6.5.6 Out of Scope: Check for "use strict" directive
+                        if src == "use strict" && !has_use_strict {
+                            has_use_strict = true;
+                            // M6.5.6 Out of Scope: Enable strict mode for remaining parsing
+                            // Add StrictMode to the current context
+                            self.ctx = self.ctx.union(Context::StrictMode);
+                        }
+
                         let directive =
                             self.ast.directive(expr.span, (*string).clone(), Atom::from(src));
                         directives.push(directive);
@@ -73,7 +83,7 @@ impl<'a> ParserImpl<'a> {
             statements.push(stmt);
         }
 
-        (directives, statements)
+        (directives, statements, has_use_strict)
     }
 
     /// `StatementListItem`[Yield, Await, Return] :
