@@ -83,6 +83,9 @@ impl<'a> ParserImpl<'a> {
             statements.push(stmt);
         }
 
+        // M6.5.6 Phase 2.1: Check for unclosed parentheses at end of statement list
+        self.check_unclosed_parens();
+
         (directives, statements, has_use_strict)
     }
 

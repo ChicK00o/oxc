@@ -233,6 +233,17 @@ pub fn legacy_octal(span: Span) -> OxcDiagnostic {
         .with_help("Use the modern octal syntax '0o' instead (e.g., 0o777)")
 }
 
+// M6.5.6 Phase 2.1: Unclosed parenthesis
+#[cold]
+pub fn unclosed_paren(opening_span: Span, current_span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("Unclosed parenthesis")
+        .with_labels([
+            opening_span.label("Opening parenthesis here"),
+            current_span.label("Expected closing parenthesis before this"),
+        ])
+        .with_help("Add a closing ')' to match the opening parenthesis")
+}
+
 #[cold]
 pub fn escaped_keyword(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("Keywords cannot contain escape characters").with_label(span)

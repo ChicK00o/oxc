@@ -200,6 +200,13 @@ impl<'a> ParserImpl<'a> {
     /// # Errors
     #[inline]
     pub(crate) fn expect(&mut self, kind: Kind) {
+        // M6.5.6 Phase 2.1: Track opening parentheses for unclosed paren detection
+        // Track BEFORE checking/advancing so we capture the actual token
+        if self.options.recover_from_errors && kind == Kind::LParen && self.at(kind) {
+            let span = self.cur_token().span();
+            self.state.push_paren(span);
+        }
+
         if !self.at(kind) {
             self.handle_expect_failure(kind);
         }
@@ -214,6 +221,11 @@ impl<'a> ParserImpl<'a> {
     /// - When `recover_from_errors` is `false`: Sets fatal error and terminates parsing.
     #[inline]
     pub(crate) fn expect_closing(&mut self, kind: Kind, opening_span: Span) {
+        // M6.5.6 Phase 2.1: Track closing parentheses
+        if self.options.recover_from_errors && kind == Kind::RParen && self.at(kind) {
+            self.state.pop_paren();
+        }
+
         if !self.at(kind) {
             let range = self.cur_token().span();
             let error = diagnostics::expect_closing(
@@ -605,6 +617,23 @@ impl<'a> ParserImpl<'a> {
         }
 
         (list, rest)
+    }
+
+    /// M6.5.6 Phase 2.1: Check for unclosed parentheses and generate errors
+    ///
+    /// Call this at synchronization points (end of statements, blocks, or file) to detect
+    /// unclosed parens and generate helpful error messages.
+    pub(crate) fn check_unclosed_parens(&mut self) {
+        if !self.options.recover_from_errors {
+            return;
+        }
+
+        if let Some(opening_span) = self.state.first_unclosed_paren() {
+            let current_span = self.cur_token().span();
+            self.error(diagnostics::unclosed_paren(opening_span, current_span));
+            // Clear the paren stack after reporting to avoid duplicate errors
+            self.state.paren_stack.clear();
+        }
     }
 }
 
