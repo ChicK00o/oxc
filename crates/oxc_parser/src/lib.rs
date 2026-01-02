@@ -1862,4 +1862,50 @@ mod test {
         // Without recovery, should panic on error
         assert!(ret.panicked, "Parser should panic without recovery enabled");
     }
+
+    // BUG: Error recovery breaks TypeScript function return types
+    // This test demonstrates the regression where enabling error recovery
+    // causes TypeScript functions with return type annotations to fail parsing
+    #[test]
+    fn test_typescript_function_with_error_recovery() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::default().with_typescript(true);
+        let source = "function test(x: number): number { return x; }";
+
+        // WITHOUT error recovery - should work
+        let ret_no_recovery = Parser::new(&allocator, source, source_type).parse();
+        assert!(!ret_no_recovery.panicked, "TypeScript function should parse without recovery");
+        assert_eq!(ret_no_recovery.errors.len(), 0, "Should have no errors without recovery");
+        assert_eq!(ret_no_recovery.program.body.len(), 1, "Should parse the function");
+
+        // WITH error recovery - currently broken (BUG)
+        let ret_with_recovery = Parser::new(&allocator, source, source_type)
+            .with_options(ParseOptions {
+                recover_from_errors: true,
+                ..Default::default()
+            })
+            .parse();
+
+        // Debug: print errors
+        eprintln!("WITH RECOVERY:");
+        eprintln!("  Panicked: {}", ret_with_recovery.panicked);
+        eprintln!("  Errors: {}", ret_with_recovery.errors.len());
+        for (i, error) in ret_with_recovery.errors.iter().enumerate() {
+            eprintln!("    Error {}: {:?}", i + 1, error);
+        }
+        eprintln!("  Statements: {}", ret_with_recovery.program.body.len());
+
+        // THIS IS THE BUG: error recovery breaks TypeScript return type parsing
+        // Expected: same as without recovery (no errors, 1 statement)
+        // Actual: panicked=true, errors=2, statements=0
+        assert!(!ret_with_recovery.panicked,
+            "BUG: TypeScript function should parse with recovery enabled (panicked={})",
+            ret_with_recovery.panicked);
+        assert_eq!(ret_with_recovery.errors.len(), 0,
+            "BUG: TypeScript function should have no errors with recovery (errors={})",
+            ret_with_recovery.errors.len());
+        assert_eq!(ret_with_recovery.program.body.len(), 1,
+            "BUG: Should parse the function with recovery (statements={})",
+            ret_with_recovery.program.body.len());
+    }
 }

@@ -379,8 +379,13 @@ impl<'a> ParserImpl<'a> {
     ) -> Option<T> {
         let checkpoint = self.checkpoint_with_error_recovery();
         let ctx = self.ctx;
+        let errors_before = checkpoint.errors_pos;
         let node = func(self);
-        if self.fatal_error.is_none() {
+        let errors_after = self.errors.len();
+
+        // Check if either fatal error occurred OR new errors were added
+        // In error recovery mode, errors are non-fatal but still indicate failure
+        if self.fatal_error.is_none() && errors_after == errors_before {
             Some(node)
         } else {
             self.ctx = ctx;

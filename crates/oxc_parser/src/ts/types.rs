@@ -20,6 +20,7 @@ impl<'a> ParserImpl<'a> {
         }
         let span = self.start_span();
         let ty = self.parse_union_type_or_higher();
+
         if !self.ctx.has_disallow_conditional_types()
             && !self.cur_token().is_on_new_line()
             && self.eat(Kind::Extends)
@@ -1153,6 +1154,7 @@ impl<'a> ParserImpl<'a> {
         };
 
         let ty = self.parse_ts_type();
+
         if let Some(parameter_name) = type_predicate_variable {
             let type_annotation = Some(self.ast.ts_type_annotation(ty.span(), ty));
             return self.ast.ts_type_type_predicate(
