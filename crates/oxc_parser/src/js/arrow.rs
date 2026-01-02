@@ -140,9 +140,13 @@ impl<'a> ParserImpl<'a> {
                         }
 
                         match third {
-                            // If we have something like "(a:", then we must have a
-                            // type-annotated parameter in an arrow function expression.
-                            Kind::Colon => Tristate::True,
+                            // If we have something like "(a:", this MIGHT be an arrow function
+                            // with a type annotation, OR a parenthesized expression with type.
+                            // Use Maybe to allow backtracking if there's no '=>' after ')'.
+                            // Examples:
+                            //   (a: string) => a  // Arrow function - VALID
+                            //   (x: number)       // Parenthesized expression - VALID
+                            Kind::Colon => Tristate::Maybe,
                             // If we have "(a?:" or "(a?," or "(a?=" or "(a?)" then it is definitely a lambda.
                             Kind::Question => {
                                 self.bump_any();
