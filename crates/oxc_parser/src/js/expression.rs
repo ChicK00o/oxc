@@ -577,9 +577,12 @@ impl<'a> ParserImpl<'a> {
             self.context_stack.pop();
         }
 
-        // M6.5.6 Phase 4: Validate spread element positions
-        // Spread elements in arrays should only appear as the last element
-        self.validate_spread_element_positions(&elements);
+        // NOTE: Multiple spread elements in array literals are VALID in JavaScript.
+        // The restriction "spread must be last" only applies to:
+        // - Rest parameters: function f(...a, ...b) {} - INVALID
+        // - Destructuring: const [...rest, x] = arr - INVALID
+        // Array literals can have multiple spreads: [...a, ...b] - VALID
+        // Previously added validation here was incorrect and has been removed.
 
         self.expect(Kind::RBrack);
         self.ast.expression_array(self.end_span(span), elements)
@@ -599,123 +602,6 @@ impl<'a> ParserImpl<'a> {
     pub(crate) fn parse_elision(&self) -> ArrayExpressionElement<'a> {
         self.ast.array_expression_element_elision(self.cur_token().span())
     }
-
-    /// M6.5.6 Phase 4: Validate that spread elements in arrays are only in the last position
-    fn validate_spread_element_positions(
-        &mut self,
-        elements: &oxc_allocator::Vec<'a, ArrayExpressionElement<'a>>,
-    ) {
-        let mut last_spread_index: Option<usize> = None;
-
-        // Find all spread elements
-        for (i, element) in elements.iter().enumerate() {
-            if matches!(element, ArrayExpressionElement::SpreadElement(_)) {
-                // If we already found a spread, this is an error (multiple spreads)
-                if let Some(_prev_index) = last_spread_index {
-                    // Error: multiple spread elements
-                    if let ArrayExpressionElement::SpreadElement(spread) = element
-                        && self.options.recover_from_errors
-                    {
-                        self.error(diagnostics::spread_last_element(spread.span));
-                    }
-                    // If not in recovery mode, we'll catch it below
-                }
-                last_spread_index = Some(i);
-            }
-        }
-
-        // Check if spread is not last
-        if let Some(spread_index) = last_spread_index
-            && spread_index != elements.len() - 1
-        {
-            // Spread is not the last element
-            if let Some(ArrayExpressionElement::SpreadElement(spread)) = elements.get(spread_index)
-            {
-                if self.options.recover_from_errors {
-                    self.error(diagnostics::spread_last_element(spread.span));
-                } else {
-                    self.set_fatal_error(diagnostics::spread_last_element(spread.span));
-                }
-            }
-        }
-    }
-
-    /// M6.5.6 Phase 5: Helper functions for error recovery
-    /// Create a dummy identifier for invalid identifier contexts
-    #[inline]
-    #[expect(dead_code)]
-    pub(crate) fn create_dummy_identifier(&mut self, prefix: &str) -> IdentifierReference<'a> {
-        let span = self.cur_token().span();
-        self.ast.identifier_reference(span, self.ast.atom(&format!("__{prefix}__")))
-    }
-
-    /// Create a dummy expression for invalid expression contexts
-    #[inline]
-    #[expect(dead_code)]
-    pub(crate) fn create_dummy_expression(&mut self) -> Expression<'a> {
-        let dummy = self.create_dummy_identifier("invalid_expr");
-        Expression::Identifier(self.alloc(dummy))
-    }
-
-    /// Create a dummy numeric literal (value = 0) for invalid number contexts
-    #[inline]
-    #[expect(dead_code)]
-    pub(crate) fn create_dummy_number_literal(&mut self) -> NumericLiteral<'a> {
-        let span = self.cur_token().span();
-        let raw = self.ast.atom("0");
-        self.ast.numeric_literal(span, 0.0, Some(raw), NumberBase::Decimal)
-    }
-
-    /// Check if number string is valid for given base
-    #[inline]
-    #[expect(dead_code)]
-    pub(crate) fn is_valid_for_base(&self, value: &str, base: NumberBase) -> bool {
-        value.chars().all(|c| {
-            if c == '_' {
-                return true; // Numeric separator, valid
-            }
-            match base {
-                NumberBase::Binary => c == '0' || c == '1',
-                NumberBase::Octal => ('0'..='7').contains(&c),
-                NumberBase::Hex => c.is_ascii_hexdigit(),
-                NumberBase::Decimal | NumberBase::Float => {
-                    c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-'
-                }
-            }
-        })
-    }
-
-    /// Find first invalid digit in number string for given base
-    #[inline]
-    #[expect(dead_code)]
-    pub(crate) fn find_invalid_digit(&self, value: &str, base: NumberBase) -> char {
-        for ch in value.chars() {
-            if ch == '_' {
-                continue; // Numeric separator, valid
-            }
-
-            let is_valid = match base {
-                NumberBase::Binary => ch == '0' || ch == '1',
-                NumberBase::Octal => ('0'..='7').contains(&ch),
-                NumberBase::Hex => ch.is_ascii_hexdigit(),
-                NumberBase::Decimal | NumberBase::Float => {
-                    ch.is_ascii_digit()
-                        || ch == '.'
-                        || ch == 'e'
-                        || ch == 'E'
-                        || ch == '+'
-                        || ch == '-'
-                }
-            };
-
-            if !is_valid {
-                return ch;
-            }
-        }
-
-        '?' // Shouldn't reach here if called correctly
-    }
-
     /// Section [Template Literal](https://tc39.es/ecma262/#prod-TemplateLiteral)
     /// `TemplateLiteral`[Yield, Await, Tagged] :
     ///     `NoSubstitutionTemplate`
