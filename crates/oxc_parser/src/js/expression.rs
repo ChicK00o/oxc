@@ -640,6 +640,78 @@ impl<'a> ParserImpl<'a> {
         }
     }
 
+    /// M6.5.6 Phase 5: Helper functions for error recovery
+
+    /// Create a dummy identifier for invalid identifier contexts
+    #[inline]
+    pub(crate) fn create_dummy_identifier(&mut self, prefix: &str) -> IdentifierReference<'a> {
+        let span = self.cur_token().span();
+        self.ast.identifier_reference(span, self.ast.atom(&format!("__{prefix}__")))
+    }
+
+    /// Create a dummy expression for invalid expression contexts
+    #[inline]
+    pub(crate) fn create_dummy_expression(&mut self) -> Expression<'a> {
+        let dummy = self.create_dummy_identifier("invalid_expr");
+        Expression::Identifier(self.alloc(dummy))
+    }
+
+    /// Create a dummy numeric literal (value = 0) for invalid number contexts
+    #[inline]
+    pub(crate) fn create_dummy_number_literal(&mut self) -> NumericLiteral<'a> {
+        let span = self.cur_token().span();
+        let raw = self.ast.atom("0");
+        self.ast.numeric_literal(span, 0.0, Some(raw), NumberBase::Decimal)
+    }
+
+    /// Check if number string is valid for given base
+    #[inline]
+    pub(crate) fn is_valid_for_base(&self, value: &str, base: NumberBase) -> bool {
+        value.chars().all(|c| {
+            if c == '_' {
+                return true; // Numeric separator, valid
+            }
+            match base {
+                NumberBase::Binary => c == '0' || c == '1',
+                NumberBase::Octal => ('0'..='7').contains(&c),
+                NumberBase::Hex => c.is_ascii_hexdigit(),
+                NumberBase::Decimal | NumberBase::Float => {
+                    c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-'
+                }
+            }
+        })
+    }
+
+    /// Find first invalid digit in number string for given base
+    #[inline]
+    pub(crate) fn find_invalid_digit(&self, value: &str, base: NumberBase) -> char {
+        for ch in value.chars() {
+            if ch == '_' {
+                continue; // Numeric separator, valid
+            }
+
+            let is_valid = match base {
+                NumberBase::Binary => ch == '0' || ch == '1',
+                NumberBase::Octal => ('0'..='7').contains(&ch),
+                NumberBase::Hex => ch.is_ascii_hexdigit(),
+                NumberBase::Decimal | NumberBase::Float => {
+                    ch.is_ascii_digit()
+                        || ch == '.'
+                        || ch == 'e'
+                        || ch == 'E'
+                        || ch == '+'
+                        || ch == '-'
+                }
+            };
+
+            if !is_valid {
+                return ch;
+            }
+        }
+
+        '?' // Shouldn't reach here if called correctly
+    }
+
     /// Section [Template Literal](https://tc39.es/ecma262/#prod-TemplateLiteral)
     /// `TemplateLiteral`[Yield, Await, Tagged] :
     ///     `NoSubstitutionTemplate`
