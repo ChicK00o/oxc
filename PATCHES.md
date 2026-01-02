@@ -2298,3 +2298,193 @@ pub(crate) fn expect(&mut self, kind: Kind) {
 - `e8f7ddf` - M6.5.5: Update OXC submodule reference (main project)
 - `20bff87` - M6.5.5: Mark milestone as complete with task checkoffs (main project)
 
+---
+
+## M6.5.6: Identifier & Expression Error Recovery
+
+**Phase**: Phase 6 - OXC Parser Enhancements  
+**Status**: In Progress (Phase 1 Complete)  
+**Date**: 2025-01-02
+
+### Overview
+
+M6.5.6 implements error recovery for identifier and expression-level syntax errors, completing the comprehensive OXC error recovery implementation. Phase 1 focuses on reserved word identifier recovery.
+
+### Phase 1: Reserved Word Identifier Recovery
+
+**Problem**: OXC parser terminates when reserved keywords are used as identifiers (e.g., `let import = 5;`, `let x = import + 5;`).
+
+**Files Modified**:
+- `crates/oxc_parser/src/js/expression.rs`: Lines 65-112, 746-761
+
+#### 1.1 Binding Identifier Recovery
+
+**Location**: `parse_binding_identifier()` (expression.rs:77-113)
+
+Reserved words used as binding identifiers (variable names, function names, etc.) now recover gracefully:
+
+```rust
+if !cur.is_binding_identifier() {
+    return if cur.is_reserved_keyword() {
+        let span = self.cur_token().span();
+        let keyword_str = cur.to_str();
+        let error = diagnostics::identifier_reserved_word(span, keyword_str);
+
+        if self.options.recover_from_errors {
+            // Error recovery: create identifier from reserved word anyway
+            self.error(error);
+
+            // Create identifier using the reserved word's name
+            let name = self.cur_string();
+            self.bump_any();
+
+            self.ast.binding_identifier(span, name)
+        } else {
+            self.fatal_error(error)
+        }
+    } else {
+        self.unexpected()
+    };
+}
+```
+
+**Before**:
+```typescript
+let import = 5;    // FATAL ERROR: Parser stops
+let x = 10;        // Never parsed
+```
+
+**After**:
+```typescript
+let import = 5;    // ❌ Error: 'import' is a reserved word
+                   // ✅ Identifier created, parsing continues
+let x = 10;        // ✅ Parsed correctly
+```
+
+#### 1.2 Identifier Reference Recovery  
+
+**Location**: `parse_identifier_reference()` (expression.rs:65-87)
+
+Reserved words used in expression contexts now recover:
+
+```rust
+if !kind.is_identifier_reference(false, false) {
+    // Check if it's a reserved keyword that needs recovery
+    if kind.is_reserved_keyword() && self.options.recover_from_errors {
+        let span = self.cur_token().span();
+        let keyword_str = kind.to_str();
+        let error = diagnostics::identifier_reserved_word(span, keyword_str);
+        self.error(error);
+
+        // Create identifier from reserved word anyway
+        let name = self.cur_string();
+        self.bump_any();
+
+        return self.ast.identifier_reference(span, name);
+    }
+    return self.unexpected();
+}
+```
+
+**Before**:
+```typescript
+let x = import + 5;  // FATAL ERROR: Parser stops
+let y = 10;          // Never parsed
+```
+
+**After**:
+```typescript
+let x = import + 5;  // ❌ Error: 'import' is a reserved word
+                     // ✅ Expression parsed
+let y = 10;          // ✅ Parsed correctly
+```
+
+#### 1.3 Import Expression Recovery
+
+**Location**: `parse_import_meta_or_call()` (expression.rs:746-761)
+
+Special handling for `import` keyword when used as standalone identifier:
+
+```rust
+_ => {
+    // M6.5.6: Error recovery for 'import' used as identifier
+    // When 'import' is followed by neither '.' nor '(', it's being used as an identifier
+    if self.options.recover_from_errors {
+        let import_span = meta.span; // Use the span from the already-parsed meta identifier
+        let error = diagnostics::identifier_reserved_word(import_span, "import");
+        self.error(error);
+
+        // Return identifier reference from 'import' keyword
+        Expression::Identifier(self.alloc(self.ast.identifier_reference(import_span, "import")))
+    } else {
+        self.unexpected()
+    }
+}
+```
+
+**Context**: In `parse_primary_expression()`, `Kind::Import` is matched before the default identifier case to handle `import.meta` and `import()`. When `import` is followed by neither `.` nor `(`, recovery treats it as an identifier.
+
+**Before**:
+```typescript
+let y = import;  // FATAL ERROR: Unexpected token
+```
+
+**After**:
+```typescript
+let y = import;  // ❌ Error: 'import' is a reserved word
+                 // ✅ Assignment parsed
+```
+
+### Test Results
+
+All basic reserved word recovery tests pass:
+
+```bash
+$ cargo run --package oxc_parser --example debug_reserved_word
+Test A: let import = 5;           ✓ 1 error, 1 statement
+Test C: const class = 1;          ✓ 1 error, 1 statement
+Test D: var return = 3;           ✓ 1 error, 1 statement
+Test E: let y = import;           ✓ 1 error, 2 statements
+Test G: let x = 5 + import;       ✓ 1 error, 1 statement
+```
+
+### Reserved Keywords Covered
+
+- **Always reserved**: `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default`, `delete`, `do`, `else`, `export`, `extends`, `finally`, `for`, `function`, `if`, `import`, `in`, `instanceof`, `new`, `return`, `super`, `switch`, `this`, `throw`, `try`, `typeof`, `var`, `void`, `while`, `with`, `yield`
+- **Strict mode**: `implements`, `interface`, `let`, `package`, `private`, `protected`, `public`, `static`
+- **Future reserved**: `enum`
+- **Contextual**: `await`, `async` (context-dependent, handled by semantic analysis)
+
+### Diagnostic
+
+**Function**: `diagnostics::identifier_reserved_word(span: Span, keyword: &str)` (diagnostics.rs:503)
+
+**Message**: `"Identifier expected. '{keyword}' is a reserved word that cannot be used here."`
+
+### Special Cases
+
+1. **Property Names**: Reserved words as object property names are valid and not affected:
+   ```typescript
+   let obj = { class: 1, import: 2 };  // ✅ No errors (valid syntax)
+   ```
+
+2. **const enum**: Special TypeScript construct - `const enum` triggers enum declaration parsing. This is correct behavior since `enum` is reserved:
+   ```typescript
+   const enum = 2;  // Parser attempts to parse enum declaration (expected behavior)
+   ```
+
+### Phase 1 Status
+
+✅ **Complete**:
+- Reserved word binding identifier recovery
+- Reserved word identifier reference recovery
+- Import keyword special case handling
+- Test coverage for basic cases
+- Quality checks pass (fmt, clippy, build, test)
+
+⏳ **Remaining Phases**:
+- Phase 2: Number literal error recovery (binary, octal, hex)
+- Phase 3: Parenthesized expression recovery
+- Phase 4: Spread element & class property recovery
+- Phase 5: Binding pattern recovery & integration
+

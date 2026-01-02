@@ -66,6 +66,19 @@ impl<'a> ParserImpl<'a> {
         // allow `await` and `yield`, let semantic analysis report error
         let kind = self.cur_kind();
         if !kind.is_identifier_reference(false, false) {
+            // Check if it's a reserved keyword that needs recovery
+            if kind.is_reserved_keyword() && self.options.recover_from_errors {
+                let span = self.cur_token().span();
+                let keyword_str = kind.to_str();
+                let error = diagnostics::identifier_reserved_word(span, keyword_str);
+                self.error(error);
+
+                // Create identifier from reserved word anyway
+                let name = self.cur_string();
+                self.bump_any();
+
+                return self.ast.identifier_reference(span, name);
+            }
             return self.unexpected();
         }
         self.check_identifier(kind, self.ctx);
@@ -78,9 +91,22 @@ impl<'a> ParserImpl<'a> {
         let cur = self.cur_kind();
         if !cur.is_binding_identifier() {
             return if cur.is_reserved_keyword() {
-                let error =
-                    diagnostics::identifier_reserved_word(self.cur_token().span(), cur.to_str());
-                self.fatal_error(error)
+                let span = self.cur_token().span();
+                let keyword_str = cur.to_str();
+                let error = diagnostics::identifier_reserved_word(span, keyword_str);
+
+                if self.options.recover_from_errors {
+                    // Error recovery: create identifier from reserved word anyway
+                    self.error(error);
+
+                    // Create identifier using the reserved word's name
+                    let name = self.cur_string();
+                    self.bump_any();
+
+                    self.ast.binding_identifier(span, name)
+                } else {
+                    self.fatal_error(error)
+                }
             } else {
                 self.unexpected()
             };
@@ -717,7 +743,22 @@ impl<'a> ParserImpl<'a> {
                 }
             }
             Kind::LParen => self.parse_import_expression(span, None),
-            _ => self.unexpected(),
+            _ => {
+                // M6.5.6: Error recovery for 'import' used as identifier
+                // When 'import' is followed by neither '.' nor '(', it's being used as an identifier
+                if self.options.recover_from_errors {
+                    let import_span = meta.span; // Use the span from the already-parsed meta identifier
+                    let error = diagnostics::identifier_reserved_word(import_span, "import");
+                    self.error(error);
+
+                    // Return identifier reference from 'import' keyword
+                    Expression::Identifier(
+                        self.alloc(self.ast.identifier_reference(import_span, "import")),
+                    )
+                } else {
+                    self.unexpected()
+                }
+            }
         }
     }
 
