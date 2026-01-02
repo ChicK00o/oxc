@@ -23,7 +23,12 @@ impl<'a> ParserImpl<'a> {
         if matches!(self.cur_kind(), Kind::Eof | Kind::Undetermined)
             && let Some(error) = self.lexer.errors.pop()
         {
-            self.set_fatal_error(error);
+            // M6.5.6: Respect recovery mode for lexer errors
+            if self.options.recover_from_errors {
+                self.error(error);
+            } else {
+                self.set_fatal_error(error);
+            }
             return;
         }
 
@@ -31,12 +36,22 @@ impl<'a> ParserImpl<'a> {
         if let Some(start_span) = self.is_merge_conflict_marker() {
             let (middle_span, end_span) = self.find_merge_conflict_markers();
             let error = diagnostics::merge_conflict_marker(start_span, middle_span, end_span);
-            self.set_fatal_error(error);
+            // M6.5.6: Respect recovery mode for merge conflict markers
+            if self.options.recover_from_errors {
+                self.error(error);
+            } else {
+                self.set_fatal_error(error);
+            }
             return;
         }
 
         let error = diagnostics::unexpected_token(self.cur_token().span());
-        self.set_fatal_error(error);
+        // M6.5.6: Respect recovery mode for unexpected tokens
+        if self.options.recover_from_errors {
+            self.error(error);
+        } else {
+            self.set_fatal_error(error);
+        }
     }
 
     /// Return error info at current token and attempt recovery.

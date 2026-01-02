@@ -144,9 +144,11 @@ impl<'a> ParserImpl<'a> {
                             crate::synchronization::RecoveryDecision::Skip => continue,
                             crate::synchronization::RecoveryDecision::Abort => break,
                         }
+                    } else {
+                        // M6.5.6: Non-recovery mode - fatal error
+                        self.set_fatal_error(error);
+                        break;
                     }
-                    self.set_fatal_error(error);
-                    break;
                 }
                 self.bump_any();
                 let kind = self.cur_kind();
@@ -174,9 +176,11 @@ impl<'a> ParserImpl<'a> {
                         crate::synchronization::RecoveryDecision::Skip => continue,
                         crate::synchronization::RecoveryDecision::Abort => break,
                     }
+                } else {
+                    // M6.5.6: Non-recovery mode - fatal error
+                    self.set_fatal_error(error);
+                    break;
                 }
-                self.set_fatal_error(error);
-                break;
             }
 
             if self.at(Kind::Dot3) {

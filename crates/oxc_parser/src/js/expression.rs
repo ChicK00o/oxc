@@ -569,9 +569,11 @@ impl<'a> ParserImpl<'a> {
                             crate::synchronization::RecoveryDecision::Skip => continue,
                             crate::synchronization::RecoveryDecision::Abort => break,
                         }
+                    } else {
+                        // M6.5.6: Non-recovery mode - fatal error
+                        self.set_fatal_error(error);
+                        break;
                     }
-                    self.set_fatal_error(error);
-                    break;
                 }
 
                 self.bump(Kind::Comma);
@@ -1224,9 +1226,11 @@ impl<'a> ParserImpl<'a> {
                             crate::synchronization::RecoveryDecision::Skip => continue,
                             crate::synchronization::RecoveryDecision::Abort => break,
                         }
+                    } else {
+                        // M6.5.6: Non-recovery mode - fatal error
+                        self.set_fatal_error(error);
+                        break;
                     }
-                    self.set_fatal_error(error);
-                    break;
                 }
 
                 self.bump(Kind::Comma);

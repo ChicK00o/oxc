@@ -151,7 +151,12 @@ impl<'a> ParserImpl<'a> {
         } else {
             let span = Span::empty(self.prev_token_end);
             let error = diagnostics::auto_semicolon_insertion(span);
-            self.set_fatal_error(error);
+            // M6.5.6: Respect recovery mode for ASI failures
+            if self.options.recover_from_errors {
+                self.error(error);
+            } else {
+                self.set_fatal_error(error);
+            }
         }
     }
 
@@ -221,12 +226,22 @@ impl<'a> ParserImpl<'a> {
     /// - When `recover_from_errors` is `false`: Sets fatal error and terminates parsing.
     #[inline]
     pub(crate) fn expect_closing(&mut self, kind: Kind, opening_span: Span) {
-        // M6.5.6 Phase 2.1: Track closing parentheses
-        if self.options.recover_from_errors && kind == Kind::RParen && self.at(kind) {
-            self.state.pop_paren();
+        // M6.5.6 Phase 2.1-2.2: Track closing parentheses and implicit insertion
+        let found_closing = self.at(kind);
+
+        if self.options.recover_from_errors && kind == Kind::RParen {
+            if found_closing {
+                // Found closing paren - pop from stack
+                self.state.pop_paren();
+            } else {
+                // M6.5.6 Phase 2.2: Implicit paren insertion
+                // Missing closing paren - pop anyway to allow recovery
+                // This simulates inserting an implicit closing paren
+                self.state.pop_paren();
+            }
         }
 
-        if !self.at(kind) {
+        if !found_closing {
             let range = self.cur_token().span();
             let error = diagnostics::expect_closing(
                 kind.to_str(),
@@ -534,14 +549,23 @@ impl<'a> ParserImpl<'a> {
                 return (list, None);
             }
             if !self.at(separator) {
-                self.set_fatal_error(diagnostics::expect_closing_or_separator(
+                let error = diagnostics::expect_closing_or_separator(
                     close.to_str(),
                     separator.to_str(),
                     kind.to_str(),
                     self.cur_token().span(),
                     opening_span,
-                ));
-                return (list, None);
+                );
+                if self.options.recover_from_errors {
+                    // M6.5.6: Recovery mode - report error and try to continue
+                    self.error(error);
+                    // Try to continue parsing by skipping to the next separator or close
+                    return (list, None);
+                } else {
+                    // Non-recovery mode: fatal error
+                    self.set_fatal_error(error);
+                    return (list, None);
+                }
             }
             self.advance(separator);
             if self.cur_kind() == close {
@@ -589,8 +613,15 @@ impl<'a> ParserImpl<'a> {
                         comma_span,
                         opening_span,
                     );
-                    self.set_fatal_error(error);
-                    break;
+                    if self.options.recover_from_errors {
+                        // M6.5.6: Recovery mode - report error and break
+                        self.error(error);
+                        break;
+                    } else {
+                        // Non-recovery mode: fatal error
+                        self.set_fatal_error(error);
+                        break;
+                    }
                 }
                 self.bump_any();
                 let kind = self.cur_kind();
@@ -603,8 +634,17 @@ impl<'a> ParserImpl<'a> {
             }
 
             if let Some(r) = &rest {
-                self.set_fatal_error(rest_last_diagnostic(r.span()));
-                break;
+                let error = rest_last_diagnostic(r.span());
+                if self.options.recover_from_errors {
+                    // M6.5.6: Recovery mode - report error and continue parsing
+                    self.error(error);
+                    // Skip the rest of the pattern and break to close
+                    break;
+                } else {
+                    // Non-recovery mode: fatal error
+                    self.set_fatal_error(error);
+                    break;
+                }
             }
 
             // Re-capture kind to get the current token (may have changed after else branch)
