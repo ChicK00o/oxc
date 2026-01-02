@@ -790,9 +790,11 @@ impl<'a> ParserImpl<'a> {
 
         let reference_span = self.start_span();
         let module_reference = if self.eat(Kind::Require) {
+            let opening_span = self.cur_token().span();
             self.expect(Kind::LParen);
             let expression = self.parse_literal_string();
-            self.expect(Kind::RParen);
+            // M6.6.0: Use expect_closing to properly pop from paren stack
+            self.expect_closing(Kind::RParen, opening_span);
             self.ast.ts_module_reference_external_module_reference(
                 self.end_span(reference_span),
                 expression,

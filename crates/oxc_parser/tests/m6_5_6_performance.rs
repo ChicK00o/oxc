@@ -11,7 +11,7 @@ use std::time::Instant;
 /// Test that recovery mode has minimal overhead for valid code
 #[test]
 fn test_recovery_mode_overhead_on_valid_code() {
-    let allocator = Allocator::default();
+    let _allocator = Allocator::default();
 
     // Large valid program to measure overhead
     let source = r#"

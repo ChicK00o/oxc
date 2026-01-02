@@ -112,6 +112,7 @@ impl Context {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn union_strict_mode_if(self, include: bool) -> Self {
         self.union_if(Self::StrictMode, include)
     }
@@ -162,6 +163,7 @@ impl Context {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn and_strict_mode(self, include: bool) -> Self {
         self.and(Self::StrictMode, include)
     }
