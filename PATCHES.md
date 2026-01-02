@@ -2302,8 +2302,8 @@ pub(crate) fn expect(&mut self, kind: Kind) {
 
 ## M6.5.6: Identifier & Expression Error Recovery
 
-**Phase**: Phase 6 - OXC Parser Enhancements  
-**Status**: In Progress (Phase 1 Complete)  
+**Phase**: Phase 6 - OXC Parser Enhancements
+**Status**: In Progress (Phases 1-3 Complete, 4-5 Deferred)
 **Date**: 2025-01-02
 
 ### Overview
@@ -2483,8 +2483,187 @@ Test G: let x = 5 + import;       ✓ 1 error, 1 statement
 - Quality checks pass (fmt, clippy, build, test)
 
 ⏳ **Remaining Phases**:
-- Phase 2: Number literal error recovery (binary, octal, hex)
-- Phase 3: Parenthesized expression recovery
+- ~~Phase 2: Number literal error recovery (binary, octal, hex)~~ ✅ Complete
+- ~~Phase 3: Parenthesized expression recovery~~ ✅ Complete
+- Phase 4: Spread element & class property recovery
+- Phase 5: Binding pattern recovery & integration
+
+### Phase 2: Number Literal Error Recovery
+
+**Problem**: OXC parser terminates when invalid number literals are encountered (e.g., `0b2`, `0o888`, `0xGGG`).
+
+**Files Modified**:
+- `crates/oxc_parser/src/js/expression.rs`: Lines 362-371
+
+#### 2.1 Invalid Number Literal Recovery (Parser-Level)
+
+**Location**: `parse_literal_number()` (expression.rs:362-371)
+
+Invalid number literals now recover at the parser level by falling back to value `0.0`:
+
+```rust
+let value = value.unwrap_or_else(|err| {
+    // M6.5.6 Phase 2: Error recovery for invalid number literals
+    if self.options.recover_from_errors {
+        self.error(diagnostics::invalid_number(err, span));
+        0.0 // Dummy value, continue parsing
+    } else {
+        self.set_fatal_error(diagnostics::invalid_number(err, span));
+        0.0
+    }
+});
+```
+
+**Before**:
+```typescript
+let a = 0b2;       // FATAL ERROR: Parser stops
+let b = 10;        // Never parsed
+```
+
+**After**:
+```typescript
+let a = 0b2;       // ❌ Error: Invalid binary digit
+                   // ✅ Numeric literal created with value 0
+let b = 10;        // ✅ Parsed correctly
+```
+
+#### 2.2 Test Results
+
+All parser-level number recovery tests pass:
+
+```bash
+$ cargo run --package oxc_parser --example test_number_literals
+Test 1: Invalid binary (0b2)          ✓ 1 error, 1 statement (recovered)
+Test 2: Invalid octal (0o888)         ✓ 1 error, 1 statement (recovered)
+Test 3: Invalid hex (0xGGG)           ✓ 1 error, 1 statement (recovered)
+Test 4: Multiple invalid numbers      ✓ 3 errors, 4 statements (recovered)
+Test 5: Invalid number in expression  ✓ 1 error, 1 statement (recovered)
+```
+
+#### 2.3 Lexer-Level Recovery (Deferred)
+
+**Status**: Deferred for future work
+
+**Reason**: Lexer-level number parsing in `crates/oxc_parser/src/lexer/numeric.rs` requires deeper changes to handle invalid digits without returning `Kind::Eof`. Current parser-level recovery is sufficient for most error cases.
+
+**Current Limitation**: When the lexer encounters an invalid number and stops tokenizing, subsequent statements on the same line may not be parsed. Parser-level recovery handles cases where the lexer successfully tokenizes the invalid number.
+
+**Example of Current Behavior**:
+```typescript
+let a = 0b2; let b = 10;  // Lexer stops at '2', only parses first statement
+```
+
+**Future Enhancement**: Modify lexer to consume invalid digits and return a token kind instead of `Kind::Eof`, allowing parser to continue on the same line.
+
+### Phase 3: Parenthesized Expression Recovery
+
+**Problem**: OXC parser terminates when parenthesized expressions have errors (trailing commas, empty parentheses).
+
+**Files Modified**:
+- `crates/oxc_parser/src/js/expression.rs`: Lines 257-282
+
+#### 3.1 Trailing Comma Recovery
+
+**Location**: `parse_parenthesized_expression()` (expression.rs:257-269)
+
+Parenthesized expressions with trailing commas now recover gracefully:
+
+```rust
+// M6.5.6 Phase 3: Handle trailing comma with recovery
+if let Some(comma_span) = comma_span {
+    let error = diagnostics::unexpected_trailing_comma(
+        "Parenthesized expressions",
+        self.end_span(comma_span),
+    );
+    if self.options.recover_from_errors {
+        self.error(error);
+        // Continue with the expressions we have
+    } else {
+        return self.fatal_error(error);
+    }
+}
+```
+
+**Before**:
+```typescript
+let x = (1, 2,);   // FATAL ERROR: Parser stops
+let y = 10;        // Never parsed
+```
+
+**After**:
+```typescript
+let x = (1, 2,);   // ❌ Error: Parenthesized expressions may not have a trailing comma
+                   // ✅ Sequence expression created, parsing continues
+let y = 10;        // ✅ Parsed correctly
+```
+
+#### 3.2 Empty Parentheses Recovery
+
+**Location**: `parse_parenthesized_expression()` (expression.rs:271-282)
+
+Empty parentheses in expression context now recover by creating a dummy identifier:
+
+```rust
+// M6.5.6 Phase 3: Handle empty parentheses with recovery
+if expressions.is_empty() {
+    self.expect(Kind::RParen);
+    let error = diagnostics::empty_parenthesized_expression(self.end_span(span));
+    if self.options.recover_from_errors {
+        self.error(error);
+        // Return a dummy identifier expression
+        return self.ast.expression_identifier(self.end_span(span), "__empty_parens__");
+    } else {
+        return self.fatal_error(error);
+    }
+}
+```
+
+**Before**:
+```typescript
+let x = ();        // FATAL ERROR: Parser stops
+let y = 10;        // Never parsed
+```
+
+**After**:
+```typescript
+let x = ();        // ❌ Error: Empty parenthesized expression
+                   // ✅ Dummy identifier created (__empty_parens__), parsing continues
+let y = 10;        // ✅ Parsed correctly
+```
+
+#### 3.3 Test Results
+
+All parenthesized expression recovery tests pass:
+
+```bash
+$ cargo run --package oxc_parser --example test_parenthesis_recovery
+Test 1: Trailing comma (1, 2,)        ✓ 1 error, 1 statement (recovered)
+Test 2: Empty parentheses ()          ✓ 1 error, 1 statement (recovered)
+Test 3: Valid parentheses (1, 2)      ✓ No errors (valid syntax)
+Test 4: Multiple errors               ✓ 2 errors, 3 statements (recovered)
+```
+
+#### 3.4 Diagnostics Used
+
+**Trailing Comma**: `diagnostics::unexpected_trailing_comma(name: &'static str, span: Span)` (diagnostics.rs:157)
+- **Message**: `"{name} may not have a trailing comma."`
+
+**Empty Parentheses**: `diagnostics::empty_parenthesized_expression(span: Span)` (diagnostics.rs:545)
+- **Message**: `"Empty parenthesized expression"`
+
+### Phase 2-3 Status
+
+✅ **Complete**:
+- Parser-level number literal recovery (binary, octal, hex)
+- Trailing comma in parentheses recovery
+- Empty parenthesized expression recovery
+- Test coverage for all cases
+- Quality checks pass (fmt, clippy, build, test)
+
+⏸️ **Deferred**:
+- Lexer-level number recovery (complex, requires deeper lexer changes)
+
+⏳ **Remaining Phases**:
 - Phase 4: Spread element & class property recovery
 - Phase 5: Binding pattern recovery & integration
 

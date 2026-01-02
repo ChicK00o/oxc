@@ -254,17 +254,29 @@ impl<'a> ParserImpl<'a> {
             )
         });
 
+        // M6.5.6 Phase 3: Handle trailing comma with recovery
         if let Some(comma_span) = comma_span {
             let error = diagnostics::unexpected_trailing_comma(
                 "Parenthesized expressions",
                 self.end_span(comma_span),
             );
-            return self.fatal_error(error);
+            if self.options.recover_from_errors {
+                self.error(error);
+                // Continue with the expressions we have
+            } else {
+                return self.fatal_error(error);
+            }
         }
 
+        // M6.5.6 Phase 3: Handle empty parentheses with recovery
         if expressions.is_empty() {
             self.expect(Kind::RParen);
             let error = diagnostics::empty_parenthesized_expression(self.end_span(span));
+            if self.options.recover_from_errors {
+                self.error(error);
+                // Return a dummy identifier expression
+                return self.ast.expression_identifier(self.end_span(span), "__empty_parens__");
+            }
             return self.fatal_error(error);
         }
 
@@ -360,8 +372,14 @@ impl<'a> ParserImpl<'a> {
             _ => unreachable!(),
         };
         let value = value.unwrap_or_else(|err| {
-            self.set_fatal_error(diagnostics::invalid_number(err, span));
-            0.0 // Dummy value
+            // M6.5.6 Phase 2: Error recovery for invalid number literals
+            if self.options.recover_from_errors {
+                self.error(diagnostics::invalid_number(err, span));
+                0.0 // Dummy value, continue parsing
+            } else {
+                self.set_fatal_error(diagnostics::invalid_number(err, span));
+                0.0 // Dummy value
+            }
         });
         let base = match kind {
             Kind::Decimal => NumberBase::Decimal,
