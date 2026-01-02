@@ -216,9 +216,9 @@ impl<'a> ParserImpl<'a> {
     }
 
     /// M6.5.6 Phase 5: Helper function for binding pattern error recovery
-
     /// Create a dummy binding identifier for invalid binding contexts
     #[inline]
+    #[expect(dead_code)]
     pub(crate) fn create_dummy_binding_identifier(
         &mut self,
         prefix: &str,

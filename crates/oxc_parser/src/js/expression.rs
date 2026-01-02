@@ -641,9 +641,9 @@ impl<'a> ParserImpl<'a> {
     }
 
     /// M6.5.6 Phase 5: Helper functions for error recovery
-
     /// Create a dummy identifier for invalid identifier contexts
     #[inline]
+    #[expect(dead_code)]
     pub(crate) fn create_dummy_identifier(&mut self, prefix: &str) -> IdentifierReference<'a> {
         let span = self.cur_token().span();
         self.ast.identifier_reference(span, self.ast.atom(&format!("__{prefix}__")))
@@ -651,6 +651,7 @@ impl<'a> ParserImpl<'a> {
 
     /// Create a dummy expression for invalid expression contexts
     #[inline]
+    #[expect(dead_code)]
     pub(crate) fn create_dummy_expression(&mut self) -> Expression<'a> {
         let dummy = self.create_dummy_identifier("invalid_expr");
         Expression::Identifier(self.alloc(dummy))
@@ -658,6 +659,7 @@ impl<'a> ParserImpl<'a> {
 
     /// Create a dummy numeric literal (value = 0) for invalid number contexts
     #[inline]
+    #[expect(dead_code)]
     pub(crate) fn create_dummy_number_literal(&mut self) -> NumericLiteral<'a> {
         let span = self.cur_token().span();
         let raw = self.ast.atom("0");
@@ -666,6 +668,7 @@ impl<'a> ParserImpl<'a> {
 
     /// Check if number string is valid for given base
     #[inline]
+    #[expect(dead_code)]
     pub(crate) fn is_valid_for_base(&self, value: &str, base: NumberBase) -> bool {
         value.chars().all(|c| {
             if c == '_' {
@@ -684,6 +687,7 @@ impl<'a> ParserImpl<'a> {
 
     /// Find first invalid digit in number string for given base
     #[inline]
+    #[expect(dead_code)]
     pub(crate) fn find_invalid_digit(&self, value: &str, base: NumberBase) -> char {
         for ch in value.chars() {
             if ch == '_' {
