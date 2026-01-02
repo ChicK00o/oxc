@@ -51,12 +51,26 @@ impl<'a> ParserImpl<'a> {
             Self::parse_rest_element,
             diagnostics::binding_rest_element_last,
         );
-        if let Some(rest) = &rest
-            && !matches!(&rest.argument, BindingPattern::BindingIdentifier(_))
-        {
-            let error = diagnostics::invalid_binding_rest_element(rest.argument.span());
-            return self.fatal_error(error);
-        }
+        // M6.5.6 Phase 5: Validate rest element type with error recovery
+        let rest = match rest {
+            Some(rest_elem)
+                if !matches!(&rest_elem.argument, BindingPattern::BindingIdentifier(_)) =>
+            {
+                let error = diagnostics::invalid_binding_rest_element(rest_elem.argument.span());
+                if self.options.recover_from_errors {
+                    self.error(error);
+                    // Convert to dummy identifier for recovery
+                    let dummy_span = rest_elem.argument.span();
+                    let dummy_arg = BindingPattern::BindingIdentifier(
+                        self.alloc(self.ast.binding_identifier(dummy_span, "__rest__")),
+                    );
+                    Some(BindingRestElement { span: rest_elem.span, argument: dummy_arg })
+                } else {
+                    return self.fatal_error(error);
+                }
+            }
+            other => other,
+        };
 
         self.expect(Kind::RCurly);
         self.ast.binding_pattern_object_pattern(

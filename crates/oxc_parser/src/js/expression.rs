@@ -577,6 +577,10 @@ impl<'a> ParserImpl<'a> {
             self.context_stack.pop();
         }
 
+        // M6.5.6 Phase 4: Validate spread element positions
+        // Spread elements in arrays should only appear as the last element
+        self.validate_spread_element_positions(&elements);
+
         self.expect(Kind::RBrack);
         self.ast.expression_array(self.end_span(span), elements)
     }
@@ -594,6 +598,46 @@ impl<'a> ParserImpl<'a> {
     ///    Elision ,
     pub(crate) fn parse_elision(&self) -> ArrayExpressionElement<'a> {
         self.ast.array_expression_element_elision(self.cur_token().span())
+    }
+
+    /// M6.5.6 Phase 4: Validate that spread elements in arrays are only in the last position
+    fn validate_spread_element_positions(
+        &mut self,
+        elements: &oxc_allocator::Vec<'a, ArrayExpressionElement<'a>>,
+    ) {
+        let mut last_spread_index: Option<usize> = None;
+
+        // Find all spread elements
+        for (i, element) in elements.iter().enumerate() {
+            if matches!(element, ArrayExpressionElement::SpreadElement(_)) {
+                // If we already found a spread, this is an error (multiple spreads)
+                if let Some(_prev_index) = last_spread_index {
+                    // Error: multiple spread elements
+                    if let ArrayExpressionElement::SpreadElement(spread) = element
+                        && self.options.recover_from_errors
+                    {
+                        self.error(diagnostics::spread_last_element(spread.span));
+                    }
+                    // If not in recovery mode, we'll catch it below
+                }
+                last_spread_index = Some(i);
+            }
+        }
+
+        // Check if spread is not last
+        if let Some(spread_index) = last_spread_index
+            && spread_index != elements.len() - 1
+        {
+            // Spread is not the last element
+            if let Some(ArrayExpressionElement::SpreadElement(spread)) = elements.get(spread_index)
+            {
+                if self.options.recover_from_errors {
+                    self.error(diagnostics::spread_last_element(spread.span));
+                } else {
+                    self.set_fatal_error(diagnostics::spread_last_element(spread.span));
+                }
+            }
+        }
     }
 
     /// Section [Template Literal](https://tc39.es/ecma262/#prod-TemplateLiteral)

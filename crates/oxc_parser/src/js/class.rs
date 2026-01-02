@@ -686,13 +686,20 @@ impl<'a> ParserImpl<'a> {
             .eat(Kind::Eq)
             .then(|| self.context(Context::In, Context::Yield | Context::Await, Self::parse_expr));
 
-        // Handle trailing `;` or newline
+        // M6.5.6 Phase 4: Handle trailing `;` or newline with error recovery
         let cur_token = self.cur_token();
         if cur_token.kind() == Kind::Semicolon {
             self.bump_any();
         } else if !self.can_insert_semicolon() {
             let error = diagnostics::expect_token(";", cur_token.kind().to_str(), cur_token.span());
-            return self.fatal_error(error);
+            // Error recovery: apply ASI (Automatic Semicolon Insertion)
+            if self.options.recover_from_errors {
+                self.error(error);
+                // Continue parsing - ASI applied implicitly
+                // Don't consume the next token - it starts the next class member
+            } else {
+                return self.fatal_error(error);
+            }
         }
 
         let r#abstract = modifiers.contains(ModifierKind::Abstract);
