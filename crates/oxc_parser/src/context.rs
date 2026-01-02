@@ -47,6 +47,15 @@ bitflags! {
         ///   * ambient variable declaration => `declare var $: any`
         ///   * ambient class declaration => `declare class C { foo(); } , etc..`
         const Ambient = 1 << 6;
+
+        /// [StrictMode] Flag
+        /// Indicates parser is in strict mode context.
+        /// Strict mode affects:
+        /// - Reserved word validation (implements, interface, let, package, etc.)
+        /// - Legacy octal literal errors
+        /// - Duplicate parameter names
+        /// - Assignment to eval/arguments
+        const StrictMode = 1 << 7;
     }
 }
 
@@ -93,8 +102,18 @@ impl Context {
     }
 
     #[inline]
+    pub(crate) fn has_strict_mode(self) -> bool {
+        self.contains(Self::StrictMode)
+    }
+
+    #[inline]
     pub(crate) fn union_await_if(self, include: bool) -> Self {
         self.union_if(Self::Await, include)
+    }
+
+    #[inline]
+    pub(crate) fn union_strict_mode_if(self, include: bool) -> Self {
+        self.union_if(Self::StrictMode, include)
     }
 
     #[inline]
@@ -140,6 +159,11 @@ impl Context {
     #[inline]
     pub(crate) fn and_ambient(self, include: bool) -> Self {
         self.and(Self::Ambient, include)
+    }
+
+    #[inline]
+    pub(crate) fn and_strict_mode(self, include: bool) -> Self {
+        self.and(Self::StrictMode, include)
     }
 
     #[inline]
