@@ -343,8 +343,16 @@ impl<'a> ParserImpl<'a> {
 
         let checkpoint = self.checkpoint_with_error_recovery();
 
+        // Store error count before parsing
+        let errors_before = self.errors.len();
+
         let head = self.parse_parenthesized_arrow_function_head();
-        if self.has_fatal_error() {
+
+        // Check if parsing the head generated errors (e.g., missing '=>')
+        // If so, this is not an arrow function - rewind and parse as parenthesized expression
+        let has_new_errors = self.errors.len() > errors_before;
+
+        if self.has_fatal_error() || has_new_errors {
             self.state.not_parenthesized_arrow.insert(pos);
             self.rewind(checkpoint);
             return None;
