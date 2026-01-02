@@ -243,6 +243,7 @@ impl ParserImpl<'_> {
                 self.cur_kind().is_identifier_or_keyword()
                     || self.at(Kind::LBrack) // index signature
                     || self.at(Kind::LParen) // call signature
+                    || self.at(Kind::LAngle) // generic call signature
                     || self.at(Kind::New) // construct signature
                     || self.at(Kind::Readonly)
             }
