@@ -1,7 +1,7 @@
 // M6.5.6 Phase 3: Nested pattern error recovery tests
 
 use oxc_allocator::Allocator;
-use oxc_parser::{Parser, ParseOptions};
+use oxc_parser::{ParseOptions, Parser};
 use oxc_span::SourceType;
 
 #[test]
@@ -13,10 +13,7 @@ const y = 5;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect rest-not-last error in nested pattern
@@ -39,10 +36,7 @@ const z = 10;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect error
@@ -65,10 +59,7 @@ function test() { return 42; }
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect reserved word error in nested pattern

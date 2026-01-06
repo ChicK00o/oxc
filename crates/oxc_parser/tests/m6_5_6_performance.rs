@@ -4,7 +4,7 @@
 // impact parse time for valid code (which is the common case).
 
 use oxc_allocator::Allocator;
-use oxc_parser::{Parser, ParseOptions};
+use oxc_parser::{ParseOptions, Parser};
 use oxc_span::SourceType;
 use std::time::Instant;
 
@@ -47,21 +47,20 @@ const arr = [1, 2, 3, 4, 5];
 const [first, ...rest] = arr;
 const obj = {a: 1, b: 2, c: 3};
 const {a, b, c} = obj;
-"#.repeat(100); // Repeat to make it larger
+"#
+    .repeat(100); // Repeat to make it larger
 
     // Warm up
     for _ in 0..5 {
         let allocator = Allocator::default();
-        Parser::new(&allocator, &source, SourceType::default())
-            .parse();
+        Parser::new(&allocator, &source, SourceType::default()).parse();
     }
 
     // Benchmark without recovery
     let start = Instant::now();
     for _ in 0..50 {
         let allocator = Allocator::default();
-        Parser::new(&allocator, &source, SourceType::default())
-            .parse();
+        Parser::new(&allocator, &source, SourceType::default()).parse();
     }
     let duration_no_recovery = start.elapsed();
 
@@ -70,16 +69,15 @@ const {a, b, c} = obj;
     for _ in 0..50 {
         let allocator = Allocator::default();
         Parser::new(&allocator, &source, SourceType::default())
-            .with_options(ParseOptions {
-                recover_from_errors: true,
-                ..Default::default()
-            })
+            .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
             .parse();
     }
     let duration_with_recovery = start.elapsed();
 
     // Calculate overhead percentage
-    let overhead = (duration_with_recovery.as_nanos() as f64 / duration_no_recovery.as_nanos() as f64 - 1.0) * 100.0;
+    let overhead =
+        (duration_with_recovery.as_nanos() as f64 / duration_no_recovery.as_nanos() as f64 - 1.0)
+            * 100.0;
 
     println!("Without recovery: {:?}", duration_no_recovery);
     println!("With recovery:    {:?}", duration_with_recovery);
@@ -104,10 +102,7 @@ let x = (a + b;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect multiple errors

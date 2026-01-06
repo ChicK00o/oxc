@@ -1,7 +1,7 @@
 // M6.5.6 Phase 3: Loop context error recovery tests
 
 use oxc_allocator::Allocator;
-use oxc_parser::{Parser, ParseOptions};
+use oxc_parser::{ParseOptions, Parser};
 use oxc_span::SourceType;
 
 #[test]
@@ -15,10 +15,7 @@ let x = 5;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect syntax error in for loop
@@ -43,10 +40,7 @@ const y = 10;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect rest-not-last error
@@ -70,10 +64,7 @@ let y = 5;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect unclosed paren error

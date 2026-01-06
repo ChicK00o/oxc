@@ -1,7 +1,7 @@
 // M6.5.6 Phase 3: Integration tests for error recovery
 
 use oxc_allocator::Allocator;
-use oxc_parser::{Parser, ParseOptions};
+use oxc_parser::{ParseOptions, Parser};
 use oxc_span::SourceType;
 
 #[test]
@@ -21,10 +21,7 @@ const valid = 42;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect multiple errors
@@ -51,10 +48,7 @@ const z = 10;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should have errors
@@ -80,10 +74,7 @@ const result = func(1, 2;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect multiple errors
@@ -107,10 +98,7 @@ const x = 5;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect rest parameter error
@@ -136,10 +124,7 @@ const x = 10;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect errors
@@ -162,10 +147,7 @@ const local = 5;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::mjs())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should detect syntax errors

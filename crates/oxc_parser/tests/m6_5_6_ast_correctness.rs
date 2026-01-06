@@ -8,7 +8,7 @@
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
-use oxc_parser::{Parser, ParseOptions};
+use oxc_parser::{ParseOptions, Parser};
 use oxc_span::SourceType;
 
 #[test]
@@ -21,10 +21,7 @@ let z = 10;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should have errors
@@ -51,10 +48,7 @@ function test() {
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should have errors for reserved words
@@ -65,9 +59,8 @@ function test() {
     assert_eq!(program.body.len(), 3, "Should have 3 statements");
 
     // Check we have the function declaration
-    let has_function = program.body.iter().any(|stmt| {
-        matches!(stmt, Statement::FunctionDeclaration(_))
-    });
+    let has_function =
+        program.body.iter().any(|stmt| matches!(stmt, Statement::FunctionDeclaration(_)));
     assert!(has_function, "Should have function declaration");
 }
 
@@ -80,10 +73,7 @@ const y = 5;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should have error for rest not last
@@ -109,10 +99,7 @@ function valid() { return 1; }
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     // Should have multiple errors
@@ -123,9 +110,8 @@ function valid() { return 1; }
 
     // But should still have valid AST with function
     let program = ret.program;
-    let has_function = program.body.iter().any(|stmt| {
-        matches!(stmt, Statement::FunctionDeclaration(_))
-    });
+    let has_function =
+        program.body.iter().any(|stmt| matches!(stmt, Statement::FunctionDeclaration(_)));
     assert!(has_function, "Should parse valid function despite other errors");
 }
 
@@ -140,10 +126,7 @@ let x = 5;
 "#;
 
     let ret = Parser::new(&allocator, source, SourceType::default())
-        .with_options(ParseOptions {
-            recover_from_errors: true,
-            ..Default::default()
-        })
+        .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
     assert!(!ret.errors.is_empty(), "Expected paren error");
