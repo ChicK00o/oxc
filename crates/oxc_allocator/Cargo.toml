@@ -47,3 +47,6 @@ pool = []
 serialize = ["dep:serde", "oxc_estree/serialize"]
 track_allocations = []
 disable_track_allocations = []
+# TSTC: Allow larger type literals for comprehensive TypeScript type checking
+# Increases allocation limit from u32::MAX (~4GB) to allow pathological type literals
+tstc_large_types = []

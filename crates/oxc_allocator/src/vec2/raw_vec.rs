@@ -837,16 +837,32 @@ impl<T, A: Alloc> RawVec<'_, T, A> {
 // bytes is overflow because `cap` and `len` are both `u32`s.
 // On 32-bit and 16-bit we need to add an extra guard for this in case we're
 // running on a platform which can use all 4GB in user-space. e.g. PAE or x32
+//
+// TSTC: With `tstc_large_types` feature, allow much larger allocations for
+// pathological type literals found in TypeScript conformance tests.
 
 #[inline]
 fn alloc_guard(alloc_size: usize) -> Result<(), AllocError> {
-    if size_of::<usize>() < 8 {
+    #[cfg(not(feature = "tstc_large_types"))]
+    {
+        if size_of::<usize>() < 8 {
+            if alloc_size > isize::MAX as usize {
+                return Err(AllocError::CapacityOverflow);
+            }
+        } else if alloc_size > u32::MAX as usize {
+            return Err(AllocError::CapacityOverflow);
+        }
+    }
+
+    #[cfg(feature = "tstc_large_types")]
+    {
+        // Allow allocations up to isize::MAX on all platforms
+        // This supports very large type literals while maintaining memory safety
         if alloc_size > isize::MAX as usize {
             return Err(AllocError::CapacityOverflow);
         }
-    } else if alloc_size > u32::MAX as usize {
-        return Err(AllocError::CapacityOverflow);
     }
+
     Ok(())
 }
 

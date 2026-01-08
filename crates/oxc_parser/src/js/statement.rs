@@ -50,7 +50,16 @@ impl<'a> ParserImpl<'a> {
             if !is_top_level && self.at(Kind::RCurly) {
                 break;
             }
+            let before = self.cur_token();
             let stmt = self.parse_statement_list_item(stmt_ctx);
+            if self.cur_token().start() == before.start() && self.cur_kind() == before.kind() {
+                if self.cur_kind() == Kind::Eof {
+                    break;
+                }
+                self.error(diagnostics::unexpected_token(self.cur_token().span()));
+                self.bump_any();
+                continue;
+            }
 
             // Section 11.2.1 Directive Prologue
             // The only way to get a correct directive is to parse the statement first and check if it is a string literal.
