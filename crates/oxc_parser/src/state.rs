@@ -44,6 +44,7 @@ impl ParserState<'_> {
     }
 
     /// M6.5.6 Phase 2.1: Check if there are unclosed parens
+    #[allow(dead_code)]
     pub fn has_unclosed_parens(&self) -> bool {
         !self.paren_stack.is_empty()
     }

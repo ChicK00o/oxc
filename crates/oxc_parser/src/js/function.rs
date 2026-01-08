@@ -84,7 +84,8 @@ impl<'a> ParserImpl<'a> {
             self.context_stack.pop();
         }
 
-        self.expect(Kind::RParen);
+        // M6.6.0: Use expect_closing to properly pop from paren stack
+        self.expect_closing(Kind::RParen, opening_span);
 
         let formal_parameters =
             self.ast.alloc_formal_parameters(self.end_span(span), params_kind, list, rest);

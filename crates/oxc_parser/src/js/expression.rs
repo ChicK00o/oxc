@@ -824,7 +824,8 @@ impl<'a> ParserImpl<'a> {
                 Self::parse_v8_intrinsic_argument,
             )
         });
-        self.expect(Kind::RParen);
+        // M6.6.0: Use expect_closing to properly pop from paren stack
+        self.expect_closing(Kind::RParen, opening_span);
         self.ast.expression_v_8_intrinsic(self.end_span(span), name, arguments)
     }
 
@@ -1250,7 +1251,8 @@ impl<'a> ParserImpl<'a> {
             self.context_stack.pop();
         }
 
-        self.expect(Kind::RParen);
+        // M6.6.0: Use expect_closing to properly pop from paren stack
+        self.expect_closing(Kind::RParen, opening_span);
         self.ast.expression_call(
             self.end_span(lhs_span),
             lhs,

@@ -36,10 +36,16 @@ impl<'a> ParserImpl<'a> {
         span: u32,
         phase: Option<ImportPhase>,
     ) -> Expression<'a> {
+        let opening_span = self.cur_token().span();
         self.expect(Kind::LParen);
 
         // M6.5.3: Error recovery for empty import()
         if self.eat(Kind::RParen) {
+            // M6.6.0: Pop the opening paren from stack since we consumed the closing paren
+            if self.options.recover_from_errors {
+                self.state.pop_paren();
+            }
+
             let error_span = self.end_span(span);
             if self.options.recover_from_errors {
                 self.error(diagnostics::import_requires_a_specifier(error_span));
@@ -88,7 +94,8 @@ impl<'a> ParserImpl<'a> {
             // else: trailing comma before ), which is OK
         }
 
-        self.expect(Kind::RParen);
+        // M6.6.0: Use expect_closing to properly pop from paren stack
+        self.expect_closing(Kind::RParen, opening_span);
 
         self.ctx = self.ctx.and_in(has_in);
         let expr =
