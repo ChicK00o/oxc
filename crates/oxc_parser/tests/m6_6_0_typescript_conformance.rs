@@ -9,21 +9,15 @@ use oxc_span::SourceType;
 use std::fs;
 use std::path::Path;
 
-const TYPESCRIPT_ERROR_RECOVERY_DIR: &str =
-    "/Users/rohitbhosle/project/personal/tstc/typescript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery";
+const TYPESCRIPT_ERROR_RECOVERY_DIR: &str = "/Users/rohitbhosle/project/personal/tstc/typescript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery";
 
 fn parse_typescript_file(path: &Path) -> (usize, bool) {
     let source = fs::read_to_string(path).expect("Failed to read TypeScript test file");
     let allocator = Allocator::default();
     let source_type = SourceType::tsx();
-    let options = ParseOptions {
-        recover_from_errors: true,
-        ..ParseOptions::default()
-    };
+    let options = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
 
-    let result = Parser::new(&allocator, &source, source_type)
-        .with_options(options)
-        .parse();
+    let result = Parser::new(&allocator, &source, source_type).with_options(options).parse();
 
     let error_count = result.errors.len();
     // Success if we generated any program (even with empty body, as long as no panic)
@@ -56,7 +50,10 @@ fn test_typescript_error_recovery_suite() {
     let base_dir = Path::new(TYPESCRIPT_ERROR_RECOVERY_DIR);
 
     if !base_dir.exists() {
-        eprintln!("TypeScript error recovery tests not found at: {}", TYPESCRIPT_ERROR_RECOVERY_DIR);
+        eprintln!(
+            "TypeScript error recovery tests not found at: {}",
+            TYPESCRIPT_ERROR_RECOVERY_DIR
+        );
         eprintln!("Skipping TypeScript conformance tests");
         return;
     }
@@ -89,21 +86,28 @@ fn test_typescript_error_recovery_suite() {
 
     println!();
     println!("=== Results ===");
-    println!("Passed: {}/{} ({:.1}%)", passed, test_files.len(),
-             (passed as f64 / test_files.len() as f64) * 100.0);
+    println!(
+        "Passed: {}/{} ({:.1}%)",
+        passed,
+        test_files.len(),
+        (passed as f64 / test_files.len() as f64) * 100.0
+    );
     println!("Failed: {}", failed);
     println!("Total errors reported: {}", total_errors);
     println!("Average errors per file: {:.2}", total_errors as f64 / test_files.len() as f64);
 
     // Assert that we processed the expected number of files
-    assert_eq!(test_files.len(), 92,
-               "Expected 92 TypeScript error recovery test files, found {}", test_files.len());
+    assert_eq!(
+        test_files.len(),
+        92,
+        "Expected 92 TypeScript error recovery test files, found {}",
+        test_files.len()
+    );
 
     // We expect high pass rate (>90%) but don't require 100% since some tests
     // may have very severe errors that prevent program generation
     let pass_rate = (passed as f64 / test_files.len() as f64) * 100.0;
-    assert!(pass_rate > 90.0,
-            "Pass rate {:.1}% is below 90% threshold", pass_rate);
+    assert!(pass_rate > 90.0, "Pass rate {:.1}% is below 90% threshold", pass_rate);
 }
 
 #[test]
@@ -146,14 +150,10 @@ fn test_specific_error_recovery_categories() {
             }
         }
 
-        let pass_rate = if files.is_empty() {
-            0.0
-        } else {
-            (passed as f64 / files.len() as f64) * 100.0
-        };
+        let pass_rate =
+            if files.is_empty() { 0.0 } else { (passed as f64 / files.len() as f64) * 100.0 };
 
-        println!("{:30} {:3}/{:3} files ({:5.1}%)",
-                 category, passed, files.len(), pass_rate);
+        println!("{:30} {:3}/{:3} files ({:5.1}%)", category, passed, files.len(), pass_rate);
     }
 }
 
@@ -173,6 +173,8 @@ fn test_parser_fuzz_case() {
     println!("parserFuzz1.ts: {} errors", error_count);
 
     // Should handle fuzz case without crashing
-    assert!(has_program || error_count > 0,
-            "Parser should either generate program or report errors");
+    assert!(
+        has_program || error_count > 0,
+        "Parser should either generate program or report errors"
+    );
 }

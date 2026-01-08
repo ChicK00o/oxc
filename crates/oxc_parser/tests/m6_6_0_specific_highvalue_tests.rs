@@ -31,14 +31,9 @@ if ( a1 && (a2 + a3 > 0) {
 
     let allocator = Allocator::default();
     let source_type = SourceType::default();
-    let options = ParseOptions {
-        recover_from_errors: true,
-        ..ParseOptions::default()
-    };
+    let options = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
 
-    let result = Parser::new(&allocator, source, source_type)
-        .with_options(options)
-        .parse();
+    let result = Parser::new(&allocator, source, source_type).with_options(options).parse();
 
     // Verify error recovery worked
     println!("missingCloseParenStatements.ts: {} errors", result.errors.len());
@@ -58,15 +53,16 @@ if ( a1 && (a2 + a3 > 0) {
     // Check for specific errors mentioned in milestone:
     // Line 2: if ( a1 && (a2 + a3 > 0) { - missing )
     // Line 3: while( (a2 > 0) && a1 - missing )
-    let has_paren_errors = result.errors.iter().any(|e|
-        e.message.contains("Expected") ||
-        e.message.contains(")")
-    );
+    let has_paren_errors =
+        result.errors.iter().any(|e| e.message.contains("Expected") || e.message.contains(")"));
     assert!(has_paren_errors, "Should report missing paren errors");
 
     // Verify no cascading errors (should be reasonable error count, not 50+)
-    assert!(result.errors.len() < 20,
-        "Should not have cascading errors, got {} errors", result.errors.len());
+    assert!(
+        result.errors.len() < 20,
+        "Should not have cascading errors, got {} errors",
+        result.errors.len()
+    );
 }
 
 // Test 2: parametersSyntaxErrorNoCrash1.ts (deferred from M6.5.0)
@@ -81,14 +77,9 @@ function identity<T>(arg: T: T {
 
     let allocator = Allocator::default();
     let source_type = SourceType::tsx(); // TypeScript
-    let options = ParseOptions {
-        recover_from_errors: true,
-        ..ParseOptions::default()
-    };
+    let options = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
 
-    let result = Parser::new(&allocator, source, source_type)
-        .with_options(options)
-        .parse();
+    let result = Parser::new(&allocator, source, source_type).with_options(options).parse();
 
     println!("parametersSyntaxErrorNoCrash1.ts: {} errors", result.errors.len());
     for (i, err) in result.errors.iter().enumerate() {
@@ -106,15 +97,16 @@ function identity<T>(arg: T: T {
 
     // Verify only 1-2 errors (not cascading)
     // The milestone says "Verify only 1-2 errors (not cascading)"
-    assert!(result.errors.len() <= 3,
-        "Should have only 1-3 errors (not cascading), got {}", result.errors.len());
+    assert!(
+        result.errors.len() <= 3,
+        "Should have only 1-3 errors (not cascading), got {}",
+        result.errors.len()
+    );
 
     // Check that error mentions expected token
-    let has_expected_error = result.errors.iter().any(|e|
-        e.message.contains("Expected") ||
-        e.message.contains(",") ||
-        e.message.contains(")")
-    );
+    let has_expected_error = result.errors.iter().any(|e| {
+        e.message.contains("Expected") || e.message.contains(",") || e.message.contains(")")
+    });
     assert!(has_expected_error, "Should mention expected ',' or ')'");
 }
 
@@ -134,14 +126,9 @@ class C {
 
     let allocator = Allocator::default();
     let source_type = SourceType::tsx(); // TypeScript
-    let options = ParseOptions {
-        recover_from_errors: true,
-        ..ParseOptions::default()
-    };
+    let options = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
 
-    let result = Parser::new(&allocator, source, source_type)
-        .with_options(options)
-        .parse();
+    let result = Parser::new(&allocator, source, source_type).with_options(options).parse();
 
     println!("errorRecoveryInClassDeclaration.ts: {} errors", result.errors.len());
     for (i, err) in result.errors.iter().enumerate() {
@@ -159,8 +146,11 @@ class C {
 
     // Verify each invalid member gets error (not cascading into many errors)
     // The invalid syntax is "public blaz() {}" inside foo(...) which is invalid
-    assert!(result.errors.len() < 10,
-        "Should not have cascading errors, got {}", result.errors.len());
+    assert!(
+        result.errors.len() < 10,
+        "Should not have cascading errors, got {}",
+        result.errors.len()
+    );
 
     // Check semicolon handling in recovery mode
     // The code has proper semicolons after statements
@@ -173,7 +163,9 @@ class C {
 #[test]
 fn test_all_high_value_files_no_panic() {
     let files = vec![
-        ("missingCloseParenStatements", r"
+        (
+            "missingCloseParenStatements",
+            r"
 var a1, a2, a3 = 0;
 if ( a1 && (a2 + a3 > 0) {
     while( (a2 > 0) && a1
@@ -183,32 +175,34 @@ if ( a1 && (a2 + a3 > 0) {
             a1 = a1 + i;
         } while (i < 5 && (a1 > 5);
     }
-}"),
-        ("parametersSyntaxErrorNoCrash1", r"
+}",
+        ),
+        (
+            "parametersSyntaxErrorNoCrash1",
+            r"
 function identity<T>(arg: T: T {
     return arg;
-}"),
-        ("errorRecoveryInClassDeclaration", r"
+}",
+        ),
+        (
+            "errorRecoveryInClassDeclaration",
+            r"
 class C {
     public bar() {
         var v = foo(
             public blaz() {}
             );
     }
-}"),
+}",
+        ),
     ];
 
     for (name, source) in files {
         let allocator = Allocator::default();
         let source_type = SourceType::tsx();
-        let options = ParseOptions {
-            recover_from_errors: true,
-            ..ParseOptions::default()
-        };
+        let options = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
 
-        let result = Parser::new(&allocator, source, source_type)
-            .with_options(options)
-            .parse();
+        let result = Parser::new(&allocator, source, source_type).with_options(options).parse();
 
         assert!(!result.panicked, "{} should not panic", name);
         assert!(!result.errors.is_empty(), "{} should report errors", name);
