@@ -49,8 +49,11 @@ macro_rules! control_flow {
 #[cfg(not(feature = "cfg"))]
 macro_rules! control_flow {
     ($self:ident, |$cfg:tt| $body:expr) => {{
-        let _ = $self; // Suppress unused variable warning
-        ()
+        #[expect(clippy::unused_unit)]
+        {
+            let _ = $self; // Suppress unused variable warning
+            ()
+        }
     }};
 }
 
@@ -103,7 +106,7 @@ pub struct SemanticBuilder<'a> {
     #[cfg(feature = "cfg")]
     pub(crate) cfg: Option<ControlFlowGraphBuilder<'a>>,
     #[cfg(not(feature = "cfg"))]
-    #[allow(unused)]
+    #[expect(unused)]
     pub(crate) cfg: (),
 
     pub(crate) class_table_builder: ClassTableBuilder<'a>,
@@ -183,6 +186,7 @@ impl<'a> SemanticBuilder<'a> {
     }
 
     #[cfg(not(feature = "cfg"))]
+    #[must_use]
     pub fn with_cfg(self, _cfg: bool) -> Self {
         self
     }
@@ -380,6 +384,7 @@ impl<'a> SemanticBuilder<'a> {
 
     #[inline]
     #[cfg(not(feature = "cfg"))]
+    #[expect(clippy::unused_self, clippy::needless_pass_by_ref_mut)]
     fn record_ast_node(&mut self) {}
 
     #[inline]
@@ -520,7 +525,8 @@ impl<'a> SemanticBuilder<'a> {
             let bindings = self.scoping.get_bindings(self.current_scope_id);
             if let Some(symbol_id) = bindings.get(name.as_str()).copied() {
                 let symbol_flags = self.scoping.symbol_flags(symbol_id);
-                references.retain(|&reference_id| {
+                references.retain(|reference_id| {
+                    let reference_id = *reference_id;
                     let reference = &mut self.scoping.references[reference_id];
 
                     let flags = reference.flags_mut();
@@ -613,14 +619,19 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
         self.unresolved_references.decrement_scope_depth();
     }
 
-    // Setup all the context for the binder.
-    // The order is important here.
     // NB: Not called for `Program`.
     fn enter_node(&mut self, kind: AstKind<'a>) {
         self.create_ast_node(kind);
-        self.enter_kind(kind);
     }
 
+    /// Both this function and `checker::check` must be inlined. Each `visit_*` method calls
+    /// `leave_node` with a statically known `AstKind`, so inlining allows the compiler to
+    /// constant-fold `checker::check`'s match, eliminating all non-matching arms.
+    #[expect(
+        clippy::inline_always,
+        reason = "enables compile-time match elimination in checker::check"
+    )]
+    #[inline(always)]
     fn leave_node(&mut self, kind: AstKind<'a>) {
         if self.check_syntax_error {
             checker::check(kind, self);
@@ -693,6 +704,9 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_break_statement(&mut self, stmt: &BreakStatement<'a>) {
         let kind = AstKind::BreakStatement(self.alloc(stmt));
         self.enter_node(kind);
+        if let Some(label) = &stmt.label {
+            self.unused_labels.reference(label.name.as_str());
+        }
 
         /* cfg */
         #[cfg(feature = "cfg")]
@@ -751,6 +765,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_block_statement(&mut self, it: &BlockStatement<'a>) {
         let kind = AstKind::BlockStatement(self.alloc(it));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
 
         let parent_scope_id = self.current_scope_id;
         self.enter_scope(ScopeFlags::empty(), &it.scope_id);
@@ -785,6 +800,9 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_continue_statement(&mut self, stmt: &ContinueStatement<'a>) {
         let kind = AstKind::ContinueStatement(self.alloc(stmt));
         self.enter_node(kind);
+        if let Some(label) = &stmt.label {
+            self.unused_labels.reference(label.name.as_str());
+        }
 
         /* cfg */
         #[cfg(feature = "cfg")]
@@ -806,6 +824,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_do_while_statement(&mut self, stmt: &DoWhileStatement<'a>) {
         let kind = AstKind::DoWhileStatement(self.alloc(stmt));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
 
         /* cfg */
         #[cfg(feature = "cfg")]
@@ -1065,6 +1084,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_for_statement(&mut self, stmt: &ForStatement<'a>) {
         let kind = AstKind::ForStatement(self.alloc(stmt));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
         self.enter_scope(ScopeFlags::empty(), &stmt.scope_id);
         if let Some(init) = &stmt.init {
             self.visit_for_statement_init(init);
@@ -1135,6 +1155,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_for_in_statement(&mut self, stmt: &ForInStatement<'a>) {
         let kind = AstKind::ForInStatement(self.alloc(stmt));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
         self.enter_scope(ScopeFlags::empty(), &stmt.scope_id);
 
         self.visit_for_statement_left(&stmt.left);
@@ -1198,6 +1219,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_for_of_statement(&mut self, stmt: &ForOfStatement<'a>) {
         let kind = AstKind::ForOfStatement(self.alloc(stmt));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
         self.enter_scope(ScopeFlags::empty(), &stmt.scope_id);
 
         self.visit_for_statement_left(&stmt.left);
@@ -1260,6 +1282,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_if_statement(&mut self, stmt: &IfStatement<'a>) {
         let kind = AstKind::IfStatement(self.alloc(stmt));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
 
         /* cfg - condition basic block */
         #[cfg(feature = "cfg")]
@@ -1333,6 +1356,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_labeled_statement(&mut self, stmt: &LabeledStatement<'a>) {
         let kind = AstKind::LabeledStatement(self.alloc(stmt));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
         self.unused_labels.add(stmt.label.name.as_str(), self.current_node_id);
 
         /* cfg */
@@ -1399,6 +1423,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_switch_statement(&mut self, stmt: &SwitchStatement<'a>) {
         let kind = AstKind::SwitchStatement(self.alloc(stmt));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
         self.visit_expression(&stmt.discriminant);
         self.enter_scope(ScopeFlags::empty(), &stmt.scope_id);
 
@@ -1524,6 +1549,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_try_statement(&mut self, stmt: &TryStatement<'a>) {
         let kind = AstKind::TryStatement(self.alloc(stmt));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
 
         /* cfg */
 
@@ -1658,6 +1684,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_while_statement(&mut self, stmt: &WhileStatement<'a>) {
         let kind = AstKind::WhileStatement(self.alloc(stmt));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
 
         /* cfg - condition basic block */
         #[cfg(feature = "cfg")]
@@ -1706,6 +1733,7 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_with_statement(&mut self, stmt: &WithStatement<'a>) {
         let kind = AstKind::WithStatement(self.alloc(stmt));
         self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
 
         /* cfg - condition basic block */
         #[cfg(feature = "cfg")]
@@ -2091,6 +2119,9 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_ts_type_query(&mut self, ty: &TSTypeQuery<'a>) {
         let kind = AstKind::TSTypeQuery(self.alloc(ty));
         self.enter_node(kind);
+        // type A = typeof a;
+        //          ^^^^^^^^
+        self.current_reference_flags = ReferenceFlags::ValueAsType;
         self.visit_span(&ty.span);
         self.visit_ts_type_query_expr_name(&ty.expr_name);
         if let Some(type_arguments) = &ty.type_arguments {
@@ -2103,6 +2134,11 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
     fn visit_ts_property_signature(&mut self, sig: &TSPropertySignature<'a>) {
         let kind = AstKind::TSPropertySignature(self.alloc(sig));
         self.enter_node(kind);
+        if sig.key.is_expression() {
+            // interface A { [prop]: string }
+            //               ^^^^^ The property can reference value or [`SymbolFlags::TypeImport`] symbol
+            self.current_reference_flags = ReferenceFlags::ValueAsType;
+        }
         self.visit_span(&sig.span);
         self.visit_property_key(&sig.key);
         if let Some(type_annotation) = &sig.type_annotation {
@@ -2246,91 +2282,198 @@ impl<'a> Visit<'a> for SemanticBuilder<'a> {
         self.leave_scope();
         self.leave_node(kind);
     }
+
+    fn visit_ts_type_alias_declaration(&mut self, decl: &TSTypeAliasDeclaration<'a>) {
+        let kind = AstKind::TSTypeAliasDeclaration(self.alloc(decl));
+        self.enter_node(kind);
+        decl.bind(self);
+        self.visit_span(&decl.span);
+        self.visit_binding_identifier(&decl.id);
+        self.enter_scope(ScopeFlags::empty(), &decl.scope_id);
+        if let Some(type_parameters) = &decl.type_parameters {
+            self.visit_ts_type_parameter_declaration(type_parameters);
+        }
+        self.visit_ts_type(&decl.type_annotation);
+        self.leave_scope();
+        self.leave_node(kind);
+    }
+
+    fn visit_ts_interface_declaration(&mut self, decl: &TSInterfaceDeclaration<'a>) {
+        let kind = AstKind::TSInterfaceDeclaration(self.alloc(decl));
+        self.enter_node(kind);
+        decl.bind(self);
+        self.visit_span(&decl.span);
+        self.visit_binding_identifier(&decl.id);
+        self.enter_scope(ScopeFlags::empty(), &decl.scope_id);
+        if let Some(type_parameters) = &decl.type_parameters {
+            self.visit_ts_type_parameter_declaration(type_parameters);
+        }
+        self.visit_ts_interface_heritages(&decl.extends);
+        self.visit_ts_interface_body(&decl.body);
+        self.leave_scope();
+        self.leave_node(kind);
+    }
+
+    fn visit_ts_enum_declaration(&mut self, decl: &TSEnumDeclaration<'a>) {
+        let kind = AstKind::TSEnumDeclaration(self.alloc(decl));
+        self.enter_node(kind);
+        decl.bind(self);
+        self.visit_span(&decl.span);
+        self.visit_binding_identifier(&decl.id);
+        self.enter_scope(ScopeFlags::empty(), &decl.scope_id);
+        self.visit_ts_enum_body(&decl.body);
+        self.leave_scope();
+        self.leave_node(kind);
+    }
+
+    fn visit_ts_enum_member(&mut self, member: &TSEnumMember<'a>) {
+        let kind = AstKind::TSEnumMember(self.alloc(member));
+        self.enter_node(kind);
+        member.bind(self);
+        self.visit_span(&member.span);
+        self.visit_ts_enum_member_name(&member.id);
+        if let Some(initializer) = &member.initializer {
+            self.visit_expression(initializer);
+        }
+        self.leave_node(kind);
+    }
+
+    fn visit_ts_type_parameter(&mut self, param: &TSTypeParameter<'a>) {
+        let kind = AstKind::TSTypeParameter(self.alloc(param));
+        self.enter_node(kind);
+        param.bind(self);
+        self.visit_span(&param.span);
+        self.visit_binding_identifier(&param.name);
+        if let Some(constraint) = &param.constraint {
+            self.visit_ts_type(constraint);
+        }
+        if let Some(default) = &param.default {
+            self.visit_ts_type(default);
+        }
+        self.leave_node(kind);
+    }
+
+    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+        let kind = AstKind::IdentifierReference(self.alloc(ident));
+        self.enter_node(kind);
+        self.reference_identifier(ident);
+        self.visit_span(&ident.span);
+        self.leave_node(kind);
+    }
+
+    fn visit_yield_expression(&mut self, expr: &YieldExpression<'a>) {
+        let kind = AstKind::YieldExpression(self.alloc(expr));
+        self.enter_node(kind);
+        // If not in a function, `current_function_node_id` is `NodeId` of `Program`.
+        // But it shouldn't be possible for `yield` to be at top level - that's a parse error.
+        *self.nodes.flags_mut(self.current_function_node_id) |= NodeFlags::HasYield;
+        self.visit_span(&expr.span);
+        if let Some(argument) = &expr.argument {
+            self.visit_expression(argument);
+        }
+        self.leave_node(kind);
+    }
+
+    fn visit_call_expression(&mut self, expr: &CallExpression<'a>) {
+        let kind = AstKind::CallExpression(self.alloc(expr));
+        self.enter_node(kind);
+        if !expr.optional && expr.callee.is_specific_id("eval") {
+            self.scoping.scope_flags_mut(self.current_scope_id).insert(ScopeFlags::DirectEval);
+        }
+        self.visit_span(&expr.span);
+        self.visit_expression(&expr.callee);
+        if let Some(type_arguments) = &expr.type_arguments {
+            self.visit_ts_type_parameter_instantiation(type_arguments);
+        }
+        self.visit_arguments(&expr.arguments);
+        self.leave_node(kind);
+    }
+
+    fn visit_ts_interface_heritage(&mut self, heritage: &TSInterfaceHeritage<'a>) {
+        let kind = AstKind::TSInterfaceHeritage(self.alloc(heritage));
+        self.enter_node(kind);
+        // interface A extends B {}
+        //             ^^^^^^^^^
+        self.current_reference_flags = ReferenceFlags::Type;
+        self.visit_span(&heritage.span);
+        self.visit_expression(&heritage.expression);
+        if let Some(type_arguments) = &heritage.type_arguments {
+            self.visit_ts_type_parameter_instantiation(type_arguments);
+        }
+        self.leave_node(kind);
+    }
+
+    fn visit_ts_class_implements(&mut self, implements: &TSClassImplements<'a>) {
+        let kind = AstKind::TSClassImplements(self.alloc(implements));
+        self.enter_node(kind);
+        // class A implements B {}
+        //         ^^^^^^^^^^^^
+        self.current_reference_flags = ReferenceFlags::Type;
+        self.visit_span(&implements.span);
+        self.visit_ts_type_name(&implements.expression);
+        if let Some(type_arguments) = &implements.type_arguments {
+            self.visit_ts_type_parameter_instantiation(type_arguments);
+        }
+        self.leave_node(kind);
+    }
+
+    fn visit_ts_type_reference(&mut self, ty: &TSTypeReference<'a>) {
+        let kind = AstKind::TSTypeReference(self.alloc(ty));
+        self.enter_node(kind);
+        self.current_reference_flags = ReferenceFlags::Type;
+        self.visit_span(&ty.span);
+        self.visit_ts_type_name(&ty.type_name);
+        if let Some(type_arguments) = &ty.type_arguments {
+            self.visit_ts_type_parameter_instantiation(type_arguments);
+        }
+        self.leave_node(kind);
+    }
+
+    fn visit_expression_statement(&mut self, it: &ExpressionStatement<'a>) {
+        let kind = AstKind::ExpressionStatement(self.alloc(it));
+        self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
+        self.visit_span(&it.span);
+        self.visit_expression(&it.expression);
+        self.leave_node(kind);
+    }
+
+    fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
+        let kind = AstKind::VariableDeclaration(self.alloc(it));
+        self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
+        self.visit_span(&it.span);
+        self.visit_variable_declarators(&it.declarations);
+        self.leave_node(kind);
+    }
+
+    fn visit_empty_statement(&mut self, it: &EmptyStatement) {
+        let kind = AstKind::EmptyStatement(self.alloc(it));
+        self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
+        self.visit_span(&it.span);
+        self.leave_node(kind);
+    }
+
+    fn visit_debugger_statement(&mut self, it: &DebuggerStatement) {
+        let kind = AstKind::DebuggerStatement(self.alloc(it));
+        self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
+        self.visit_span(&it.span);
+        self.leave_node(kind);
+    }
+
+    fn visit_export_default_declaration(&mut self, it: &ExportDefaultDeclaration<'a>) {
+        let kind = AstKind::ExportDefaultDeclaration(self.alloc(it));
+        self.enter_node(kind);
+        control_flow!(self, |cfg| cfg.enter_statement(self.current_node_id));
+        self.visit_span(&it.span);
+        self.visit_export_default_declaration_kind(&it.declaration);
+        self.leave_node(kind);
+    }
 }
 
 impl<'a> SemanticBuilder<'a> {
-    fn enter_kind(&mut self, kind: AstKind<'a>) {
-        /* cfg */
-        control_flow!(self, |cfg| {
-            match kind {
-                AstKind::ReturnStatement(_)
-                | AstKind::BreakStatement(_)
-                | AstKind::ContinueStatement(_)
-                | AstKind::ThrowStatement(_) => { /* These types have their own `InstructionKind`. */
-                }
-                it if it.is_statement() => {
-                    cfg.enter_statement(self.current_node_id);
-                }
-                _ => { /* ignore the rest */ }
-            }
-        });
-        /* cfg */
-
-        match kind {
-            AstKind::TSTypeAliasDeclaration(type_alias_declaration) => {
-                type_alias_declaration.bind(self);
-            }
-            AstKind::TSInterfaceDeclaration(interface_declaration) => {
-                interface_declaration.bind(self);
-            }
-            AstKind::TSEnumDeclaration(enum_declaration) => {
-                enum_declaration.bind(self);
-                // TODO: const enum?
-            }
-            AstKind::TSEnumMember(enum_member) => {
-                enum_member.bind(self);
-            }
-            AstKind::TSTypeParameter(type_parameter) => {
-                type_parameter.bind(self);
-            }
-            AstKind::TSPropertySignature(signature) => {
-                if signature.key.is_expression() {
-                    // interface A { [prop]: string }
-                    //               ^^^^^ The property can reference value or [`SymbolFlags::TypeImport`] symbol
-                    self.current_reference_flags = ReferenceFlags::ValueAsType;
-                }
-            }
-            AstKind::TSTypeQuery(_) => {
-                // type A = typeof a;
-                //          ^^^^^^^^
-                self.current_reference_flags = ReferenceFlags::ValueAsType;
-            }
-            AstKind::TSInterfaceHeritage(_)
-            | AstKind::TSClassImplements(_)
-            | AstKind::TSTypeReference(_) => {
-                // interface A extends B {}
-                //             ^^^^^^^^^
-                //
-                // class A implements B {}
-                //         ^^^^^^^^^^^^
-
-                self.current_reference_flags = ReferenceFlags::Type;
-            }
-            AstKind::IdentifierReference(ident) => {
-                self.reference_identifier(ident);
-            }
-            AstKind::ContinueStatement(ContinueStatement { label, .. })
-            | AstKind::BreakStatement(BreakStatement { label, .. }) => {
-                if let Some(label) = &label {
-                    self.unused_labels.reference(&label.name);
-                }
-            }
-            AstKind::YieldExpression(_) => {
-                // If not in a function, `current_function_node_id` is `NodeId` of `Program`.
-                // But it shouldn't be possible for `yield` to be at top level - that's a parse error.
-                *self.nodes.flags_mut(self.current_function_node_id) |= NodeFlags::HasYield;
-            }
-            AstKind::CallExpression(call_expr) => {
-                if !call_expr.optional && call_expr.callee.is_specific_id("eval") {
-                    self.scoping
-                        .scope_flags_mut(self.current_scope_id)
-                        .insert(ScopeFlags::DirectEval);
-                }
-            }
-            _ => {}
-        }
-    }
-
     fn reference_identifier(&mut self, ident: &IdentifierReference<'a>) {
         let flags = self.resolve_reference_usages();
         let reference = Reference::new(self.current_node_id, flags);

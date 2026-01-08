@@ -4,6 +4,40 @@ All notable changes to this package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0).
 
+## [0.23.0] - 2026-01-06
+
+### 🚀 Features
+
+- a19cc93 oxfmt: Add debug logging to oxfmt LSP to troubleshoot resolved options at runtime (#17695) (Nicholas Rayburn)
+
+### 🐛 Bug Fixes
+
+- dcfdd41 formatter: Should not set up tailwindcss callback when no tailwindcss configuration is set (#17696) (Dunqing)
+
+## [0.22.0] - 2026-01-05
+
+### 🚀 Features
+
+- 8fd4ea9 oxfmt: `options.embeddedLanguageFormatting` is now `"auto"` by default (#17649) (leaysgur)
+
+### 🐛 Bug Fixes
+
+- 174375d oxfmt,oxlint: Disable mimalloc for 32-bit Arm targets (#17473) (Yaksh Bariya)
+
+### ⚡ Performance
+
+- abb28dc oxfmt: Turn of pretty print from sort-package-json (#17452) (Boshen)
+
+## [0.21.0] - 2025-12-29
+
+### 🚀 Features
+
+- 4df8063 oxfmt: Respect `.gitignore` in sub directries (#17352) (leaysgur)
+
+### 🐛 Bug Fixes
+
+- c6690d1 rust: Remove unsupported tokio io-std feature for WASM compatibility (#17311) (Boshen)
+
 ## [0.20.0] - 2025-12-22
 
 ### 🚀 Features
