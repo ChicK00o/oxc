@@ -918,6 +918,11 @@ impl<'a> ParserImpl<'a> {
         &mut self,
     ) -> Box<'a, TSTypeParameterInstantiation<'a>> {
         let span = self.start_span();
+        if matches!(self.cur_kind(), Kind::ShiftLeft | Kind::ShiftLeftEq | Kind::LtEq)
+            && !self.has_angle_close_ahead(128)
+        {
+            return self.unexpected();
+        }
         if !self.re_lex_ts_l_angle() {
             return self.unexpected();
         }
@@ -939,6 +944,20 @@ impl<'a> ParserImpl<'a> {
             self.error(diagnostics::ts_empty_type_argument_list(span));
         }
         self.ast.alloc_ts_type_parameter_instantiation(span, params)
+    }
+
+    fn has_angle_close_ahead(&self, max_bytes: usize) -> bool {
+        let start = usize::try_from(self.cur_token().span().end).unwrap_or(0);
+        let source = self.source_text;
+        let end = (start + max_bytes).min(source.len());
+        for byte in source.as_bytes()[start..end].iter().copied() {
+            match byte {
+                b'\n' => return false,
+                b'>' => return true,
+                _ => {}
+            }
+        }
+        false
     }
 
     fn can_follow_type_arguments_in_expr(&mut self) -> bool {

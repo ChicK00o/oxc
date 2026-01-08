@@ -360,10 +360,15 @@ impl<'a> Lexer<'a> {
                 let offset = self.source.offset_of(pos);
                 self.token.set_start(offset);
 
+                let before_pos = self.source.position();
                 // SAFETY: `byte` is byte value at current position in source
                 let kind = unsafe { self.handle_byte(byte) };
                 if kind != Kind::Skip {
                     return kind;
+                }
+                if self.source.position() == before_pos {
+                    self.unexpected_err();
+                    let _ = self.source.next_char();
                 }
             } else {
                 // Only 0 or 1 bytes left in source.
