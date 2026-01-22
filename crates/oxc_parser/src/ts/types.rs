@@ -381,6 +381,12 @@ impl<'a> ParserImpl<'a> {
             // // falls through
             // case SyntaxKind.FunctionKeyword:
             // return parseJSDocFunctionType();
+            Kind::Star => {
+                let span = self.start_span();
+                self.bump_any(); // bump `*`
+                self.ast.ts_type_js_doc_unknown_type(self.end_span(span))
+            }
+            Kind::Function => self.parse_jsdoc_function_type(),
             Kind::Question => self.parse_js_doc_unknown_or_nullable_type(),
             Kind::Bang => self.parse_js_doc_non_nullable_type(),
             Kind::Str | Kind::True | Kind::False => self.parse_literal_type(),
@@ -824,6 +830,15 @@ impl<'a> ParserImpl<'a> {
     pub(crate) fn parse_type_reference(&mut self) -> TSType<'a> {
         let span = self.start_span();
         let type_name = self.parse_ts_type_name();
+        if self.at(Kind::Dot)
+            && self.lookahead(|parser| {
+                parser.bump_any();
+                parser.at(Kind::LAngle)
+            })
+        {
+            // JSDoc-style type arguments: Array.<T>
+            self.bump_any();
+        }
         let type_parameters = self.parse_type_arguments_of_type_reference();
         self.ast.ts_type_type_reference(self.end_span(span), type_name, type_parameters)
     }
@@ -844,6 +859,15 @@ impl<'a> ParserImpl<'a> {
             let ident = self.parse_identifier_name();
             self.ast.ts_type_name_identifier_reference(ident.span, ident.name)
         };
+        if self.at(Kind::Dot)
+            && self.lookahead(|parser| {
+                parser.bump_any();
+                parser.at(Kind::LAngle)
+            })
+        {
+            // JSDoc-style type arguments: Array.<T>
+            return left;
+        }
         if self.at(Kind::Dot) { self.parse_ts_qualified_type_name(span, left) } else { left }
     }
 
@@ -1430,6 +1454,44 @@ impl<'a> ParserImpl<'a> {
         } else {
             self.unexpected()
         }
+    }
+
+    fn parse_jsdoc_function_type(&mut self) -> TSType<'a> {
+        let span = self.start_span();
+        self.bump_any(); // bump `function`
+
+        if self.at(Kind::LAngle) {
+            self.bump_any(); // bump `<`
+            let mut depth = 1usize;
+            while depth > 0 && !self.at(Kind::Eof) {
+                let kind = self.cur_kind();
+                self.bump_any();
+                match kind {
+                    Kind::LAngle => depth = depth.saturating_add(1),
+                    Kind::RAngle => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+            }
+        }
+
+        if self.eat(Kind::LParen) {
+            let mut depth = 1usize;
+            while depth > 0 && !self.at(Kind::Eof) {
+                let kind = self.cur_kind();
+                self.bump_any();
+                match kind {
+                    Kind::LParen => depth = depth.saturating_add(1),
+                    Kind::RParen => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+            }
+        }
+
+        if self.eat(Kind::Colon) {
+            let _ = self.parse_ts_type();
+        }
+
+        self.ast.ts_type_any_keyword(self.end_span(span))
     }
 
     fn parse_js_doc_unknown_or_nullable_type(&mut self) -> TSType<'a> {
