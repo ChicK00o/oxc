@@ -128,8 +128,12 @@ codecov:
 # This is necessary because JS generators use `oxc_*` crates (e.g. `oxc_minifier`), and those crates may not compile
 # unless Rust code is generated first.
 # See: https://github.com/oxc-project/oxc/issues/15564
+[unix]
 ast:
   cargo run -p oxc_ast_tools || { cargo run -p oxc_ast_tools --no-default-features && cargo run -p oxc_ast_tools; }
+[windows]
+ast:
+  try { cargo run -p oxc_ast_tools } catch { cargo run -p oxc_ast_tools --no-default-features; cargo run -p oxc_ast_tools }
 
 # ==================== PARSER ====================
 
@@ -146,6 +150,8 @@ watch-oxlint *args='':
   just watch 'cargo run -p oxlint -- --disable-nested-config {{args}}'
 
 # oxlint release build for node.js
+# After building, you can run the built version of oxlint with
+# `node apps/oxlint/dist/cli.js`
 oxlint-node:
   pnpm -C apps/oxlint run build
 
@@ -163,6 +169,7 @@ update-rule-tests name plugin='eslint':
   just fmt
 
 # Legacy aliases for backward compatibility
+new-eslint-rule name: (new-rule name "eslint")
 new-jest-rule name: (new-rule name "jest")
 new-ts-rule name: (new-rule name "typescript")
 new-unicorn-rule name: (new-rule name "unicorn")
@@ -252,7 +259,7 @@ watch-playground:
 # When testing changes to the website documentation, you may also want to run `pnpm run fmt`
 # in the website directory.
 website path:
-  cargo run -p website_linter rules --table {{path}}/src/docs/guide/usage/linter/generated-rules.md --rule-docs {{path}}/src/docs/guide/usage/linter/rules --git-ref $(git rev-parse HEAD)
+  cargo run -p website_linter rules --rules-json {{path}}/.vitepress/data/rules.json --rule-docs {{path}}/src/docs/guide/usage/linter/rules --git-ref $(git rev-parse HEAD) --rule-count {{path}}/src/docs/guide/usage
   cargo run -p website_linter cli > {{path}}/src/docs/guide/usage/linter/generated-cli.md
   cargo run -p website_linter schema-markdown > {{path}}/src/docs/guide/usage/linter/generated-config.md
   cargo run -p website_formatter cli > {{path}}/src/docs/guide/usage/formatter/generated-cli.md
@@ -261,6 +268,10 @@ website path:
 # Generate linter schema json for `npm/oxlint/configuration_schema.json`
 linter-schema-json:
   cargo run -p website_linter schema-json > npm/oxlint/configuration_schema.json
+
+# Generate formatter schema json for `npm/oxfmt/configuration_schema.json`
+formatter-schema-json:
+  cargo run -p website_formatter schema-json > npm/oxfmt/configuration_schema.json
 
 # Update VSCode extension README configuration section
 vscode-docs:

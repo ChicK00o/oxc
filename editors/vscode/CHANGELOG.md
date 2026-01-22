@@ -4,6 +4,38 @@ All notable changes to this package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0).
 
+## [1.40.0] - 2026-01-19
+
+### 🚀 Features
+
+- 883f472 vscode: Change icon source (#17998) (Alexander Lichter)
+
+### 🐛 Bug Fixes
+
+- a7e2eb2 vscode: Resolve binary paths with node resolver (#17970) (Sysix)
+
+### 📚 Documentation
+
+- d8f5c66 vcode: Add example for `editor.formatOnSave` with `editor.formatOnSaveMode` (#18126) (Sysix)
+- 5346fc9 editor: Update the README for the vscode extension to clarify experimental setting (#18048) (Connor Shea)
+
+## [1.39.0] - 2026-01-12
+
+### 🚀 Features
+
+- e3c4108 vscode: Add more supported languages to extension (#17812) (Alexander Lichter)
+- 4a46678 vscode: Activate extension on more languages (#17717) (Sysix)
+- b1298fc vscode: Sync formatter with supported files  (#17615) (Alexander Lichter)
+
+### 🐛 Bug Fixes
+
+- 28f9fba vscode: Fix nested search for binaries (#17832) (Sysix)
+- bd186b4 vscode: Search for `oxlint` and `oxfmt` in every workspace directory (#17760) (Sysix)
+
+### 📚 Documentation
+
+- 8f24fa9 vscode: Remove mention of a built-in server (#17836) (Sysix)
+
 ## [1.37.0] - 2026-01-05
 
 ### 🐛 Bug Fixes

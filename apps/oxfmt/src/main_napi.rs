@@ -38,7 +38,7 @@ pub async fn run_cli(
     #[napi(ts_arg_type = "(numThreads: number) => Promise<string[]>")]
     init_external_formatter_cb: JsInitExternalFormatterCb,
     #[napi(
-        ts_arg_type = "(options: Record<string, any>, tagName: string, code: string) => Promise<string>"
+        ts_arg_type = "(options: Record<string, any>, parserName: string, code: string) => Promise<string>"
     )]
     format_embedded_cb: JsFormatEmbeddedCb,
     #[napi(
@@ -94,9 +94,7 @@ pub async fn run_cli(
         Mode::Stdin(_) => {
             init_miette();
 
-            // TODO: `.with_external_formatter()` is not needed, just pass with `new(command, external_formatter)`
-            let result =
-                StdinRunner::new(command).with_external_formatter(Some(external_formatter)).run();
+            let result = StdinRunner::new(command, external_formatter).run();
 
             ("stdin".to_string(), Some(result.exit_code()))
         }
@@ -136,7 +134,7 @@ pub async fn format(
     #[napi(ts_arg_type = "(numThreads: number) => Promise<string[]>")]
     init_external_formatter_cb: JsInitExternalFormatterCb,
     #[napi(
-        ts_arg_type = "(options: Record<string, any>, tagName: string, code: string) => Promise<string>"
+        ts_arg_type = "(options: Record<string, any>, parserName: string, code: string) => Promise<string>"
     )]
     format_embedded_cb: JsFormatEmbeddedCb,
     #[napi(

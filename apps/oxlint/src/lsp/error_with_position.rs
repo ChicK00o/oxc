@@ -32,7 +32,7 @@ pub struct FixedContent {
 // we assume that the fix offset will not exceed 2GB in either direction
 #[expect(clippy::cast_possible_truncation)]
 pub fn message_to_lsp_diagnostic(
-    mut message: Message,
+    message: Message,
     uri: &Uri,
     source_text: &str,
     rope: &Rope,
@@ -112,20 +112,20 @@ pub fn message_to_lsp_diagnostic(
 
     let mut fixed_content = vec![];
     // Convert PossibleFixes directly to PossibleFixContent
-    match &mut message.fixes {
+    match message.fixes {
         PossibleFixes::None => {}
-        PossibleFixes::Single(fix) => {
+        PossibleFixes::Single(mut fix) => {
             if fix.message.is_none() {
                 fix.message = Some(alternative_fix_title);
             }
-            fixed_content.push(fix_to_fixed_content(fix, rope, source_text));
+            fixed_content.push(fix_to_fixed_content(&fix, rope, source_text));
         }
         PossibleFixes::Multiple(fixes) => {
-            fixed_content.extend(fixes.iter_mut().map(|fix| {
+            fixed_content.extend(fixes.into_iter().map(|mut fix| {
                 if fix.message.is_none() {
                     fix.message = Some(alternative_fix_title.clone());
                 }
-                fix_to_fixed_content(fix, rope, source_text)
+                fix_to_fixed_content(&fix, rope, source_text)
             }));
         }
     }
@@ -224,6 +224,25 @@ pub fn offset_to_position(rope: &Rope, offset: u32, source_text: &str) -> Positi
     Position::new(line, column)
 }
 
+/// Counter part of `oxc_linter::*::plugin_name_to_prefix`.
+fn prefix_to_plugin_name(prefix: &str) -> &str {
+    match prefix {
+        "eslint-plugin-import" => "import",
+        "eslint-plugin-jest" => "jest",
+        "eslint-plugin-jsdoc" => "jsdoc",
+        "eslint-plugin-jsx-a11y" => "jsx_a11y",
+        "eslint-plugin-next" => "nextjs",
+        "eslint-plugin-promise" => "promise",
+        "eslint-plugin-react-perf" => "react_perf",
+        "eslint-plugin-react" => "react",
+        "typescript-eslint" => "typescript",
+        "eslint-plugin-unicorn" => "unicorn",
+        "eslint-plugin-vitest" => "vitest",
+        "eslint-plugin-node" => "node",
+        "eslint-plugin-vue" => "vue",
+        _ => prefix,
+    }
+}
 /// Add "ignore this line" and "ignore this rule" fixes to the existing fixes.
 /// These fixes will be added to the end of the existing fixes.
 /// If the existing fixes already contain an "remove unused disable directive" fix,
@@ -242,15 +261,31 @@ fn add_ignore_fixes(
     }
 
     if let Some(rule_name) = code.number.as_ref() {
+        // this conversion is a bit messy, but basically we need to reconstruct the rule name with plugin prefix
+        let rule_name_with_plugin = if let Some(scope) = &code.scope
+            && !scope.is_empty()
+            // eslint does not has a plugin prefix
+            && scope != "eslint"
+        {
+            format!("{}/{rule_name}", prefix_to_plugin_name(scope))
+        } else {
+            rule_name.to_string()
+        };
+
         // TODO: doesn't support disabling multiple rules by name for a given line.
         fixes.push(disable_for_this_line(
-            rule_name,
+            &rule_name_with_plugin,
             error_offset,
             section_offset,
             rope,
             source_text,
         ));
-        fixes.push(disable_for_this_section(rule_name, section_offset, rope, source_text));
+        fixes.push(disable_for_this_section(
+            &rule_name_with_plugin,
+            section_offset,
+            rope,
+            source_text,
+        ));
     }
 }
 

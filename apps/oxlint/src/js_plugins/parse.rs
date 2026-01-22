@@ -32,7 +32,7 @@ pub struct ParserOptions {
     pub lang: Option<String>,
 
     /// Treat the source text as `script` or `module` code.
-    #[napi(ts_type = "'script' | 'module' | 'unambiguous' | undefined")]
+    #[napi(ts_type = "'script' | 'module' | 'commonjs' | 'unambiguous' | undefined")]
     pub source_type: Option<String>,
 
     /// Ignore non-fatal parsing errors
@@ -118,7 +118,7 @@ unsafe fn parse_raw_impl(
     // Get offsets and size of data region to be managed by arena allocator.
     // Leave space for source before it, and space for metadata after it.
     // Metadata actually only takes 5 bytes, but round everything up to multiple of 16,
-    // as `bumpalo` requires that alignment.
+    // as the arena allocator requires that alignment.
     const RAW_METADATA_SIZE: usize = size_of::<RawTransferMetadata>();
     const {
         assert!(RAW_METADATA_SIZE >= BUMP_ALIGN);
@@ -193,7 +193,8 @@ unsafe fn parse_raw_impl(
 
     // Write metadata into end of buffer
     #[allow(clippy::cast_possible_truncation)]
-    let metadata = RawTransferMetadata::new(program_offset);
+    let metadata =
+        RawTransferMetadata::new(program_offset, source_type.is_typescript(), source_type.is_jsx());
     const RAW_METADATA_OFFSET: usize = BUFFER_SIZE - RAW_METADATA_SIZE;
     const _: () = assert!(RAW_METADATA_OFFSET.is_multiple_of(BUMP_ALIGN));
     // SAFETY: `RAW_METADATA_OFFSET` is less than length of `buffer`.
