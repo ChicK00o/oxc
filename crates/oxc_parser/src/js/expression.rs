@@ -192,19 +192,22 @@ impl<'a> ParserImpl<'a> {
         self.ast.private_identifier(span, name)
     }
 
+    fn parse_private_identifier_expression(&mut self) -> Expression<'a> {
+        let span = self.cur_token().span();
+        let name = self.cur_string();
+        self.bump_any();
+        let full_name = self.ast.atom_from_strs_array(["#", name]);
+        let ident = self.ast.identifier_reference(span, full_name);
+        Expression::Identifier(self.alloc(ident))
+    }
+
     /// [+In] PrivateIdentifier in ShiftExpression[?Yield, ?Await]
     fn parse_private_in_expression(
         &mut self,
         lhs_span: u32,
-        lhs_precedence: Precedence,
+        _lhs_precedence: Precedence,
     ) -> Expression<'a> {
         let left = self.parse_private_identifier();
-        // Check if `in` operator precedence is allowed at current level.
-        // For `1 + #a in b`, when parsing RHS of `+`, lhs_precedence is `Add` which is
-        // higher than `Compare` (the precedence of `in`), so `#a in` cannot be parsed here.
-        if lhs_precedence >= Precedence::Compare {
-            return self.fatal_error(diagnostics::unexpected_private_identifier(left.span));
-        }
         self.expect(Kind::In);
         let right = self.parse_binary_expression_or_higher(Precedence::Compare);
         if let Expression::PrivateInExpression(private_in_expr) = right {
@@ -1393,8 +1396,16 @@ impl<'a> ParserImpl<'a> {
 
         let lhs_parenthesized = self.at(Kind::LParen);
         // [+In] PrivateIdentifier in ShiftExpression[?Yield, ?Await]
-        let lhs = if self.ctx.has_in() && self.at(Kind::PrivateIdentifier) {
-            self.parse_private_in_expression(lhs_span, lhs_precedence)
+        let lhs = if self.at(Kind::PrivateIdentifier) {
+            let next_kind = self.lexer.peek_token().kind();
+            if self.ctx.has_in()
+                && lhs_precedence <= Precedence::Compare
+                && next_kind == Kind::In
+            {
+                self.parse_private_in_expression(lhs_span, lhs_precedence)
+            } else {
+                self.parse_private_identifier_expression()
+            }
         } else {
             let has_pure_comment = self.lexer.trivia_builder.previous_token_has_pure_comment();
             let mut expr = self.parse_unary_expression_or_higher(lhs_span);
