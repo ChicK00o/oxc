@@ -615,7 +615,7 @@ impl<'a> ParserImpl<'a> {
                 if self.options.recover_from_errors {
                     // Get identifier for error message before consuming tokens
                     self.expect(Kind::Using);
-                    let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
+                    let identifier = self.cur_string();
                     self.error(diagnostics::using_declaration_cannot_be_exported(
                         identifier,
                         self.end_span(start_span),
@@ -653,7 +653,7 @@ impl<'a> ParserImpl<'a> {
                 if self.options.recover_from_errors {
                     self.expect(Kind::Await);
                     self.expect(Kind::Using);
-                    let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
+                    let identifier = self.cur_string();
                     self.error(diagnostics::using_declaration_cannot_be_exported(
                         identifier,
                         self.end_span(start_span),
@@ -826,6 +826,12 @@ impl<'a> ParserImpl<'a> {
         loop {
             match self.cur_kind() {
                 Kind::Var | Kind::Let | Kind::Const | Kind::Function | Kind::Class | Kind::Enum => {
+                    return true;
+                }
+                Kind::Using if self.is_using_declaration() => {
+                    return true;
+                }
+                Kind::Await if self.is_using_statement() => {
                     return true;
                 }
                 Kind::Interface | Kind::Type => {

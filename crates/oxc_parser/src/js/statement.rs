@@ -495,7 +495,7 @@ impl<'a> ParserImpl<'a> {
                     p.bump_any(); // bump `of`
                     return matches!(p.cur_kind(), Kind::Eq | Kind::Semicolon | Kind::Colon);
                 }
-                kind.is_binding_identifier()
+                kind.is_binding_identifier() || kind == Kind::LCurly
             })
         {
             return self.parse_using_declaration_for_statement(

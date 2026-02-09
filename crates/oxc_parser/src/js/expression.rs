@@ -1398,10 +1398,7 @@ impl<'a> ParserImpl<'a> {
         // [+In] PrivateIdentifier in ShiftExpression[?Yield, ?Await]
         let lhs = if self.at(Kind::PrivateIdentifier) {
             let next_kind = self.lexer.peek_token().kind();
-            if self.ctx.has_in()
-                && lhs_precedence <= Precedence::Compare
-                && next_kind == Kind::In
-            {
+            if self.ctx.has_in() && lhs_precedence <= Precedence::Compare && next_kind == Kind::In {
                 self.parse_private_in_expression(lhs_span, lhs_precedence)
             } else {
                 self.parse_private_identifier_expression()
