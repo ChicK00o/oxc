@@ -40,11 +40,14 @@ pub struct NoStringRefs {
 declare_oxc_lint!(
     /// ### What it does
     ///
-    /// This rule prevents using string literals in ref attributes.
+    /// This rule prevents using the deprecated behavior of string literals in ref attributes.
     ///
     /// ### Why is this bad?
     ///
-    /// Using string literals in ref attributes is deprecated in React.
+    /// Using string literals in ref attributes has been deprecated since React 16.3.0.
+    ///
+    /// String refs are [removed entirely in React 19](https://react.dev/blog/2024/04/25/react-19-upgrade-guide#removed-string-refs),
+    /// and so this rule can be disabled if on React 19+.
     ///
     /// ### Examples
     ///
@@ -83,6 +86,8 @@ declare_oxc_lint!(
     react,
     correctness,
     config = NoStringRefs,
+    version = "0.0.15",
+    short_description = "This rule prevents using the deprecated behavior of string literals in ref attributes.",
 );
 
 fn contains_string_literal(
@@ -120,10 +125,10 @@ impl Rule for NoStringRefs {
 
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
         match node.kind() {
-            AstKind::JSXAttribute(attr) => {
-                if is_literal_ref_attribute(attr, self.no_template_literals) {
-                    ctx.diagnostic(string_in_ref_deprecated(attr.span));
-                }
+            AstKind::JSXAttribute(attr)
+                if is_literal_ref_attribute(attr, self.no_template_literals) =>
+            {
+                ctx.diagnostic(string_in_ref_deprecated(attr.span));
             }
             member_expr if member_expr.is_member_expression_kind() => {
                 let Some(member_expr) = member_expr.as_member_expression_kind() else {

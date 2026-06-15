@@ -21,7 +21,7 @@ pub struct NoReturnInFinally;
 declare_oxc_lint!(
     /// ### What it does
     ///
-    /// Disallow return statements in a finally() callback of a promise.
+    /// Disallow return statements in a `finally()` callback of a promise.
     ///
     /// ### Why is this bad?
     ///
@@ -44,6 +44,8 @@ declare_oxc_lint!(
     NoReturnInFinally,
     promise,
     nursery,
+    version = "0.7.1",
+    short_description = "Disallow return statements in a `finally()` callback of a promise.",
 );
 
 impl Rule for NoReturnInFinally {

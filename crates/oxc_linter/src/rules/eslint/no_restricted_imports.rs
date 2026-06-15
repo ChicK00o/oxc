@@ -2,16 +2,18 @@ use std::borrow::Cow;
 
 use cow_utils::CowUtils as _;
 use lazy_regex::Regex;
+use rustc_hash::{FxHashMap, FxHashSet};
+use serde::{Deserialize, Deserializer, de::Error};
+use serde_json::Value;
+
 use oxc_ast::{
     AstKind,
     ast::{ImportOrExportKind, StringLiteral, TSImportEqualsDeclaration, TSModuleReference},
 };
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
-use oxc_span::{CompactStr, Span};
-use rustc_hash::FxHashMap;
-use serde::{Deserialize, Deserializer, de::Error};
-use serde_json::Value;
+use oxc_span::Span;
+use oxc_str::CompactStr;
 
 use crate::{
     ModuleRecord,
@@ -248,7 +250,7 @@ declare_oxc_lint!(
     ///
     /// Examples of **incorrect** code for this rule:
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", "disallowed-import"]"*/
+    /// /* no-restricted-imports: ["error", "disallowed-import"] */
     ///
     /// import foo from 'disallowed-import';
     /// export * from 'disallowed-import';
@@ -256,7 +258,7 @@ declare_oxc_lint!(
     ///
     /// Examples of **correct** code for this rule:
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", "fs"]*/
+    /// /* no-restricted-imports: ["error", "fs"] */
     ///
     /// import crypto from 'crypto';
     /// export * from "bar";
@@ -270,10 +272,10 @@ declare_oxc_lint!(
     ///
     /// Examples of **incorrect** code for this rule:
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", {
+    /// /* no-restricted-imports: ["error", {
     ///   "name": "disallowed-import",
     ///   "message": "Please use 'allowed-import' instead"
-    /// }]*/
+    /// }] */
     ///
     /// import foo from 'disallowed-import';
     /// ```
@@ -289,7 +291,7 @@ declare_oxc_lint!(
     /// Examples of **incorrect** code for `paths`:
     ///
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { "paths": ["cluster"] }]*/
+    /// /* no-restricted-imports: ["error", { "paths": ["cluster"] }] */
     ///
     /// import cluster from 'cluster';
     /// ```
@@ -318,13 +320,13 @@ declare_oxc_lint!(
     ///
     /// Examples of **incorrect** code for this rule:
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { paths: [{
+    /// /* no-restricted-imports: ["error", { paths: [{
     ///   "name": "foo",
     ///   "importNames": ["default"]
     /// }, {
     ///   "name": "bar",
     ///   "importNames": ["Baz"]
-    /// }]}]*/
+    /// }]}] */
     ///
     /// import DisallowedObject from "foo";
     /// import {Baz} from "far";
@@ -339,11 +341,11 @@ declare_oxc_lint!(
     ///
     /// Examples of **incorrect** code for this rule:
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { paths: [{
+    /// /* no-restricted-imports: ["error", { paths: [{
     ///   "name": "foo",
     ///   "allowImportNames": ["AllowedObject"],
     ///   "message": "Please use only 'AllowedObject' from 'foo'."
-    /// }]}]*/
+    /// }]}] */
     ///
     /// import { DisallowedObject } from "foo";
     /// ```
@@ -354,10 +356,10 @@ declare_oxc_lint!(
     ///
     /// Examples of **incorrect** code for this rule:
     /// ```typescript
-    /// /*eslint no-restricted-imports: ["error", { paths: [{
+    /// /* no-restricted-imports: ["error", { paths: [{
     ///   "name": "foo",
     ///   "allowTypeImports": true
-    /// }]}]*/
+    /// }]}] */
     ///
     /// import foo from 'import-foo';
     /// export { Foo } from 'import-foo';
@@ -365,10 +367,10 @@ declare_oxc_lint!(
     ///
     /// Examples of **correct** code for this rule:
     /// ```typescript
-    /// /*eslint no-restricted-imports: ["error", { paths: [{
+    /// /* no-restricted-imports: ["error", { paths: [{
     ///   "name": "foo",
     ///   "allowTypeImports": true
-    /// }]}]*/
+    /// }]}] */
     ///
     /// import type foo from 'import-foo';
     /// export type { Foo } from 'import-foo';
@@ -411,14 +413,14 @@ declare_oxc_lint!(
     /// Examples of **incorrect** code for `patterns` option:
     ///
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { "patterns": ["lodash/*"] }]*/
+    /// /* no-restricted-imports: ["error", { "patterns": ["lodash/*"] }] */
     ///
     /// import pick from 'lodash/pick';
     /// ```
     ///
     /// Examples of **correct** code for `patterns` option:
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { "patterns": ["crypto/*"] }]*/
+    /// /* no-restricted-imports: ["error", { "patterns": ["crypto/*"] }] */
     ///
     /// import crypto from 'crypto';
     /// ```
@@ -433,10 +435,10 @@ declare_oxc_lint!(
     /// Examples of **incorrect** code for `group` option:
     ///
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { patterns: [{
+    /// /* no-restricted-imports: ["error", { patterns: [{
     ///   group: ["lodash/*"],
     ///   message: "Please use the default import from 'lodash' instead."
-    /// }]}]*/
+    /// }]}] */
     ///
     /// import pick from 'lodash/pick';
     /// ```
@@ -452,9 +454,9 @@ declare_oxc_lint!(
     ///
     /// Examples of **incorrect** code for `regex` option:
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { patterns: [{
+    /// /* no-restricted-imports: ["error", { patterns: [{
     ///   regex: "@app/(api|enums).*",
-    /// }]}]*/
+    /// }]}] */
     ///
     /// import Foo from '@app/api';
     /// import Bar from '@app/api/bar';
@@ -476,11 +478,11 @@ declare_oxc_lint!(
     /// Examples of **incorrect** code for `importNames` in `patterns`:
     ///
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { patterns: [{
+    /// /* no-restricted-imports: ["error", { patterns: [{
     ///   group: ["utils/*"],
     ///   importNames: ['isEmpty'],
     ///   message: "Use 'isEmpty' from lodash instead."
-    /// }]}]*/
+    /// }]}] */
     ///
     /// import { isEmpty } from 'utils/collection-utils';
     /// ```
@@ -499,11 +501,11 @@ declare_oxc_lint!(
     /// Examples of **incorrect** code for `importNamePattern` option:
     ///
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { patterns: [{
+    /// /* no-restricted-imports: ["error", { patterns: [{
     ///   group: ["foo/*"],
     ///   importNamePattern: '^(is|has)',
     ///   message: "Use 'is*' and 'has*' functions from baz/bar instead"
-    /// }]}]*/
+    /// }]}] */
     ///
     /// import { isSomething, hasSomething } from 'foo/bar';
     /// ```
@@ -527,10 +529,10 @@ declare_oxc_lint!(
     /// Examples of **incorrect** code for `allowImportNamePattern` option:
     ///
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { patterns: [{
+    /// /* no-restricted-imports: ["error", { patterns: [{
     ///   group: ["utils/*"],
     ///   allowImportNamePattern: '^has'
-    /// }]}]*/
+    /// }]}] */
     ///
     /// import { isEmpty } from 'utils/collection-utils';
     /// ```
@@ -538,16 +540,21 @@ declare_oxc_lint!(
     /// Examples of **correct** code for `allowImportNamePattern` option:
     ///
     /// ```js
-    /// /*eslint no-restricted-imports: ["error", { patterns: [{
+    /// /* no-restricted-imports: ["error", { patterns: [{
     ///   group: ["utils/*"],
     ///   allowImportNamePattern: '^is'
-    /// }]}]*/
+    /// }]}] */
     ///
     /// import { isEmpty } from 'utils/collection-utils';
     /// ```
     NoRestrictedImports,
     eslint,
     restriction,
+    // TODO: Replace this with an actual config struct. This is a dummy value to
+    // indicate that this rule has configuration and avoid errors.
+    config = Value,
+    version = "0.15.0",
+    short_description = "Disallow specified modules when loaded by `import`.",
 );
 
 fn add_configuration_path_from_object(
@@ -654,6 +661,19 @@ enum ImportNameResult {
     GeneralDisallowed,
     DefaultDisallowed,
     NameDisallowed(NameSpan),
+}
+
+#[derive(Hash, Eq, PartialEq)]
+struct ReportedGeneralImport {
+    config_index: usize,
+    span_start: u32,
+    span_end: u32,
+}
+
+impl ReportedGeneralImport {
+    fn new(config_index: usize, span: Span) -> Self {
+        Self { config_index, span_start: span.start, span_end: span.end }
+    }
 }
 
 impl RestrictedPath {
@@ -854,6 +874,11 @@ impl RestrictedPattern {
         }
     }
 
+    fn is_side_effect_import_allowed(&self) -> bool {
+        let unused_name = CompactStr::from("__<>import_name_that_cant_be_used<>__");
+        self.is_name_span_allowed(&unused_name) == NameSpanAllowedResult::Allowed
+    }
+
     fn get_group_glob_result(&self, name: &str) -> GlobResult {
         let Some(groups) = &self.group else {
             return GlobResult::None;
@@ -969,20 +994,46 @@ impl Rule for NoRestrictedImports {
 
         self.report_side_effects(ctx, module_record);
 
+        let mut reported_general_import_paths = FxHashSet::default();
+        let mut reported_general_import_patterns = FxHashSet::default();
+
         for entry in &module_record.import_entries {
-            self.report_import_name_allowed(ctx, entry);
+            self.report_import_name_allowed(
+                ctx,
+                entry,
+                &mut reported_general_import_paths,
+                &mut reported_general_import_patterns,
+            );
         }
 
+        let mut reported_general_export_paths = FxHashSet::default();
+        let mut reported_general_export_patterns = FxHashSet::default();
+
         for entry in &module_record.local_export_entries {
-            self.report_export_name_allowed(ctx, entry);
+            self.report_export_name_allowed(
+                ctx,
+                entry,
+                &mut reported_general_export_paths,
+                &mut reported_general_export_patterns,
+            );
         }
 
         for entry in &module_record.indirect_export_entries {
-            self.report_export_name_allowed(ctx, entry);
+            self.report_export_name_allowed(
+                ctx,
+                entry,
+                &mut reported_general_export_paths,
+                &mut reported_general_export_patterns,
+            );
         }
 
         for entry in &module_record.star_export_entries {
-            self.report_export_name_allowed(ctx, entry);
+            self.report_export_name_allowed(
+                ctx,
+                entry,
+                &mut reported_general_export_paths,
+                &mut reported_general_export_patterns,
+            );
         }
     }
 }
@@ -1038,6 +1089,15 @@ impl NoRestrictedImports {
                     }
                     GlobResult::None => {}
                 }
+
+                if pattern.get_regex_result(source) && !pattern.is_side_effect_import_allowed() {
+                    ctx.diagnostic(get_diagnostic_from_import_name_result_pattern(
+                        spans[0],
+                        source,
+                        &ImportNameResult::GeneralDisallowed,
+                        pattern,
+                    ));
+                }
             }
             if !whitelist_found && let Some(err) = err {
                 ctx.diagnostic(err);
@@ -1045,10 +1105,16 @@ impl NoRestrictedImports {
         }
     }
 
-    fn report_import_name_allowed(&self, ctx: &LintContext<'_>, entry: &ImportEntry) {
+    fn report_import_name_allowed(
+        &self,
+        ctx: &LintContext<'_>,
+        entry: &ImportEntry,
+        reported_general_paths: &mut FxHashSet<ReportedGeneralImport>,
+        reported_general_patterns: &mut FxHashSet<ReportedGeneralImport>,
+    ) {
         let source = entry.module_request.name();
 
-        for path in &self.paths {
+        for (path_index, path) in self.paths.iter().enumerate() {
             if source != path.name.as_str() {
                 continue;
             }
@@ -1056,6 +1122,13 @@ impl NoRestrictedImports {
             let result = &path.get_import_name_result(&entry.import_name, entry.is_type);
 
             if *result == ImportNameResult::Allowed {
+                continue;
+            }
+
+            if *result == ImportNameResult::GeneralDisallowed
+                && !reported_general_paths
+                    .insert(ReportedGeneralImport::new(path_index, entry.statement_span))
+            {
                 continue;
             }
 
@@ -1072,7 +1145,7 @@ impl NoRestrictedImports {
         let mut whitelist_found = false;
         let mut found_errors = vec![];
 
-        for pattern in &self.patterns {
+        for (pattern_index, pattern) in self.patterns.iter().enumerate() {
             let result = &pattern.get_import_name_result(&entry.import_name, entry.is_type);
 
             if *result == ImportNameResult::Allowed {
@@ -1085,6 +1158,13 @@ impl NoRestrictedImports {
                     break;
                 }
                 GlobResult::Found => {
+                    if *result == ImportNameResult::GeneralDisallowed
+                        && !reported_general_patterns
+                            .insert(ReportedGeneralImport::new(pattern_index, entry.statement_span))
+                    {
+                        continue;
+                    }
+
                     let diagnostic = get_diagnostic_from_import_name_result_pattern(
                         entry.statement_span,
                         source,
@@ -1098,6 +1178,13 @@ impl NoRestrictedImports {
             }
 
             if pattern.get_regex_result(entry.module_request.name()) {
+                if *result == ImportNameResult::GeneralDisallowed
+                    && !reported_general_patterns
+                        .insert(ReportedGeneralImport::new(pattern_index, entry.statement_span))
+                {
+                    continue;
+                }
+
                 ctx.diagnostic(get_diagnostic_from_import_name_result_pattern(
                     entry.statement_span,
                     source,
@@ -1187,13 +1274,19 @@ impl NoRestrictedImports {
         }
     }
 
-    fn report_export_name_allowed(&self, ctx: &LintContext<'_>, entry: &ExportEntry) {
+    fn report_export_name_allowed(
+        &self,
+        ctx: &LintContext<'_>,
+        entry: &ExportEntry,
+        reported_general_paths: &mut FxHashSet<ReportedGeneralImport>,
+        reported_general_patterns: &mut FxHashSet<ReportedGeneralImport>,
+    ) {
         let Some(source) = entry.module_request.as_ref().map(crate::module_record::NameSpan::name)
         else {
             return;
         };
 
-        for path in &self.paths {
+        for (path_index, path) in self.paths.iter().enumerate() {
             if source != path.name.as_str() {
                 continue;
             }
@@ -1201,6 +1294,13 @@ impl NoRestrictedImports {
             let result = &path.get_export_name_result(&entry.import_name, entry.is_type);
 
             if *result == ImportNameResult::Allowed {
+                continue;
+            }
+
+            if *result == ImportNameResult::GeneralDisallowed
+                && !reported_general_paths
+                    .insert(ReportedGeneralImport::new(path_index, entry.statement_span))
+            {
                 continue;
             }
 
@@ -1217,7 +1317,7 @@ impl NoRestrictedImports {
         let mut whitelist_found = false;
         let mut found_errors = vec![];
 
-        for pattern in &self.patterns {
+        for (pattern_index, pattern) in self.patterns.iter().enumerate() {
             let result = &pattern.get_export_name_result(&entry.import_name, entry.is_type);
 
             if *result == ImportNameResult::Allowed {
@@ -1234,6 +1334,13 @@ impl NoRestrictedImports {
                     break;
                 }
                 GlobResult::Found => {
+                    if *result == ImportNameResult::GeneralDisallowed
+                        && !reported_general_patterns
+                            .insert(ReportedGeneralImport::new(pattern_index, entry.statement_span))
+                    {
+                        continue;
+                    }
+
                     let diagnostic = get_diagnostic_from_import_name_result_pattern(
                         entry.statement_span,
                         source,
@@ -1247,6 +1354,13 @@ impl NoRestrictedImports {
             }
 
             if pattern.get_regex_result(module_request.name()) {
+                if *result == ImportNameResult::GeneralDisallowed
+                    && !reported_general_patterns
+                        .insert(ReportedGeneralImport::new(pattern_index, entry.statement_span))
+                {
+                    continue;
+                }
+
                 ctx.diagnostic(get_diagnostic_from_import_name_result_pattern(
                     entry.statement_span,
                     source,
@@ -1802,6 +1916,15 @@ fn test() {
                 "patterns": [{
                     "regex": "my/relative-module",
                     "importNamePattern": "^Foo"
+                }]
+            }])),
+        ),
+        (
+            "import 'foo';",
+            Some(serde_json::json!([{
+                "patterns": [{
+                    "regex": "foo",
+                    "importNames": ["Bar"],
                 }]
             }])),
         ),
@@ -3069,6 +3192,19 @@ fn test() {
             Some(
                 serde_json::json!([{ "patterns": [{ "group": ["foo"], "message": "foo is forbidden, use bar instead" }] }]),
             ),
+        ),
+        (
+            r"import 'foo'",
+            Some(
+                serde_json::json!([{ "patterns": [{ "regex": "foo", "message": "foo is forbidden, use bar instead" }] }]),
+            ),
+        ),
+        (
+            r#"import { useState, useEffect, useCallback } from "react";"#,
+            Some(serde_json::json!([{
+                "name": "react",
+                "message": "Example: React is not allowed to be imported"
+            }])),
         ),
     ];
 

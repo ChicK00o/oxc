@@ -66,7 +66,7 @@ declare_oxc_lint!(
     ///
     /// ### Why is this bad?
     ///
-    /// Template literals will call toString() on the interpolated values. Some types don't have meaningful string representations (like objects that become "[object Object]") or may not have a toString method at all. This rule helps ensure that only appropriate types are used in template expressions.
+    /// Template literals will call `toString()` on the interpolated values. Some types don't have meaningful string representations (like objects that become `"[object Object]"`) or may not have a `toString` method at all. This rule helps ensure that only appropriate types are used in template expressions.
     ///
     /// ### Examples
     ///
@@ -122,8 +122,9 @@ declare_oxc_lint!(
     RestrictTemplateExpressions(tsgolint),
     typescript,
     correctness,
-    pending,
     config = RestrictTemplateExpressionsConfig,
+    version = "1.12.0",
+    short_description = "This rule restricts the types allowed in template literal expressions.",
 );
 
 impl Rule for RestrictTemplateExpressions {

@@ -1,3 +1,7 @@
+A-allocator:
+  - changed-files:
+      - any-glob-to-any-file: ["crates/oxc_allocator/**"]
+
 A-ast:
   - changed-files:
       - any-glob-to-any-file: ["crates/oxc_ast/**"]
@@ -16,7 +20,8 @@ A-cli:
 
 A-editor:
   - changed-files:
-      - any-glob-to-any-file: ["crates/oxc_language_server/**", "editors/**"]
+      - any-glob-to-any-file:
+          ["crates/oxc_language_server/**", "apps/oxlint/src/lsp/**", "apps/oxfmt/src/lsp/**"]
 
 A-formatter:
   - changed-files:
@@ -34,8 +39,9 @@ A-linter:
 
 A-linter-plugins:
   - changed-files:
-      - any-glob-to-any-file:
-          ["apps/oxlint/src-js/**", "apps/oxlint/test/**", "apps/oxlint/conformance/**"]
+      - all-globs-to-any-file:
+          ["apps/oxlint/src-js/**", "!apps/oxlint/src-js/package/config.generated.ts"]
+      - any-glob-to-any-file: ["apps/oxlint/test/**", "apps/oxlint/conformance/**"]
 
 A-minifier:
   - changed-files:

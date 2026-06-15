@@ -7,6 +7,7 @@ extend-exclude = [
   "**/*.snap",
   "**/*/CHANGELOG.md",
   "apps/oxlint/conformance/snapshot.md",
+  "apps/oxlint/src-js/package/config.generated.ts",
   "apps/oxfmt/test/**/fixtures/**",
   "crates/oxc_linter/fixtures",
   "crates/oxc_linter/src/rules/eslint/no_undefined.rs",
@@ -25,6 +26,7 @@ extend-exclude = [
   "tasks/coverage/test262",
   "tasks/coverage/typescript",
   "tasks/coverage/snapshots",
+  "tasks/prettier_conformance/jsdoc",
   "tasks/prettier_conformance/prettier",
   "tasks/prettier_conformance/snapshots",
   "tasks/transform_conformance/tests/babel-plugin-transform-react-jsx/test/fixtures/text/escapes/input.jsx",
@@ -32,6 +34,7 @@ extend-exclude = [
   "tasks/transform_conformance/overrides",
   "tasks/transform_conformance/snapshots",
   "napi/minify/test/terser.test.ts",
+  "npm/oxlint/configuration_schema.json",
 ]
 
 [default]
@@ -49,7 +52,10 @@ seeked = "seeked"
 labeledby = "labeledby"
 hashi = "hashi"
 inferrable = "inferrable"
+consts = "consts"
+writeable = "writeable"
 
 [default.extend-identifiers]
 IIFEs = "IIFEs"
 allowIIFEs = "allowIIFEs"
+TAGS_PEV_FORMATE_DESCRIPTION = "TAGS_PEV_FORMATE_DESCRIPTION"

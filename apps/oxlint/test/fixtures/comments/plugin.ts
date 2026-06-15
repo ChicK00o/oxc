@@ -1,6 +1,6 @@
 import assert from "node:assert";
 
-import type { Comment, Plugin, Rule } from "#oxlint";
+import type { Comment, Plugin, Rule } from "#oxlint/plugins";
 
 function formatComments(comments: Comment[]): string {
   let text = `${comments.length} comment${comments.length === 1 ? "" : "s"}`;
@@ -26,8 +26,13 @@ const testCommentsRule: Rule = {
     for (const comment of comments) {
       // Check getting `range` / `loc` properties twice results in same objects
       const { range, loc } = comment;
-      assert(range === comment.range);
-      assert(loc === comment.loc);
+      assert(comment.range === range);
+      assert(comment.loc === loc);
+
+      // Cloning comment with spread should include `loc` and it should be the same object
+      const clone = { ...comment };
+      assert(Object.hasOwn(clone, "loc"));
+      assert(clone.loc === loc);
 
       // Check `getRange` and `getLoc` return the same objects too
       assert(sourceCode.getRange(comment) === range);
@@ -42,6 +47,15 @@ const testCommentsRule: Rule = {
       message: `getAllComments: ${formatComments(comments)}`,
       node: ast,
     });
+
+    // Check `JSON.stringify` on comments includes `loc`
+    const firstComment = comments[0];
+    if (firstComment) {
+      context.report({
+        message: `Comment JSON.stringify:\n${JSON.stringify(firstComment, null, 2)}`,
+        node: firstComment,
+      });
+    }
 
     const [, topLevelVariable2, topLevelFunctionExport] = ast.body;
     assert(topLevelFunctionExport.type === "ExportNamedDeclaration");

@@ -80,6 +80,8 @@ declare_oxc_lint!(
     style,
     pending, // TODO: fixer
     config = AbsoluteFirst,
+    version = "0.11.1",
+    short_description = "Forbids any non-import statements before imports except directives.",
 );
 
 fn is_relative_path(path: &str) -> bool {
@@ -116,8 +118,7 @@ impl Rule for First {
                         }
                     }
                     TSModuleReference::IdentifierReference(_)
-                    | TSModuleReference::QualifiedName(_)
-                    | TSModuleReference::ThisExpression(_) => {}
+                    | TSModuleReference::QualifiedName(_) => {}
                 },
                 Statement::ImportDeclaration(decl) => {
                     if matches!(self.0, AbsoluteFirst::AbsoluteFirst) {

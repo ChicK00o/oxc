@@ -26,7 +26,7 @@ pub struct PreferObjectSpread;
 declare_oxc_lint!(
     /// ### What it does
     ///
-    /// Disallow using `Object.assign` with an object literal as the first argument and prefer the use of object spread instead
+    /// Disallow using `Object.assign` with an object literal as the first argument and prefer the use of object spread instead.
     ///
     /// ### Why is this bad?
     ///
@@ -70,7 +70,9 @@ declare_oxc_lint!(
     PreferObjectSpread,
     eslint,
     style,
-    fix
+    fix,
+    version = "0.15.9",
+    short_description = "Disallow using `Object.assign` with an object literal as the first argument and prefer the use of object spread instead.",
 );
 
 impl Rule for PreferObjectSpread {
@@ -91,16 +93,14 @@ impl Rule for PreferObjectSpread {
 
         match callee.object().get_inner_expression() {
             Expression::Identifier(ident) => {
-                if ident.name != "Object"
-                    || !unresolved_references.contains_key(ident.name.as_str())
-                {
+                if ident.name != "Object" || !unresolved_references.contains_key(&ident.name) {
                     return;
                 }
             }
             Expression::StaticMemberExpression(member_expr) => {
                 if let Expression::Identifier(ident) = member_expr.object.get_inner_expression() {
                     if ident.name != "globalThis"
-                        || !unresolved_references.contains_key(ident.name.as_str())
+                        || !unresolved_references.contains_key(&ident.name)
                     {
                         return;
                     }

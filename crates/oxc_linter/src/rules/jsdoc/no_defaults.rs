@@ -49,7 +49,10 @@ declare_oxc_lint!(
     NoDefaults,
     jsdoc,
     correctness,
+    pending,
     config = NoDefaultsConfig,
+    version = "0.3.2",
+    short_description = "Reports defaults being used on `@param` or `@default` tags.",
 );
 
 #[derive(Debug, Default, Clone, Deserialize, JsonSchema)]

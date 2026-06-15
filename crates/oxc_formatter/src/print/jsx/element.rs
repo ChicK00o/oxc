@@ -5,7 +5,7 @@ use oxc_span::{GetSpan, Span};
 use crate::{
     ast_nodes::{AstNode, AstNodes},
     best_fitting, format_args,
-    formatter::{Formatter, prelude::*, trivia::FormatTrailingComments},
+    formatter::{prelude::*, trivia::FormatTrailingComments},
     parentheses::NeedsParentheses,
     print::jsx::{FormatChildrenResult, FormatOpeningElement},
     utils::{
@@ -32,21 +32,47 @@ impl<'a> AnyJsxTagWithChildren<'a, '_> {
         }
     }
 
-    fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+    fn format_leading_comments(&self, f: &mut JsFormatter<'_, 'a>) {
         match self {
             Self::Element(element) => element.format_leading_comments(f),
             Self::Fragment(fragment) => fragment.format_leading_comments(f),
         }
     }
 
-    fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+    fn format_trailing_comments(&self, f: &mut JsFormatter<'_, 'a>) {
         let trailing_comments = if let AstNodes::ArrowFunctionExpression(arrow) =
             self.parent().parent().parent()
             && arrow.expression
         {
             f.context().comments().comments_before(arrow.span.end)
-        } else if matches!(self.parent(), AstNodes::ConditionalExpression(_)) {
-            f.context().comments().end_of_line_comments_after(self.span().end)
+        } else if let AstNodes::ConditionalExpression(conditional) = self.parent() {
+            if self.span() == conditional.alternate.span() {
+                // Since `preserveParens` is disabled, `conditional.alternate.span` only covers
+                // `<Success />`, not the surrounding parentheses or comments within them:
+                // ```jsx
+                // false ? (
+                //   <Error />
+                // ) : (
+                //   <Success />
+                //   /* comment */
+                // )
+                // ```
+                // To capture comments like the one above, we get all comments before the
+                // conditional expression's end (which includes the closing paren).
+                f.context().comments().comments_before(conditional.span.end)
+            } else {
+                f.context().comments().end_of_line_comments_after(self.span().end)
+            }
+        } else if matches!(
+            self.parent(),
+            AstNodes::TemplateLiteral(_) | AstNodes::TSTemplateLiteralType(_)
+        ) {
+            // For a JSX element inside `${...}`,
+            // the trailing comments must stop at the closing `}` of the interpolation.
+            // The default `get_trailing_comments` logic uses the next sibling's `span.start` as boundary,
+            // which can incorrectly pull in the next interpolation's leading comment
+            // when consecutive `${...}` chunks are present.
+            f.context().comments().comments_before_character(self.span().end, b'}')
         } else {
             // Fall back to default trailing comments behavior
             return match self {
@@ -102,8 +128,8 @@ impl<'a> AnyJsxTagWithChildren<'a, '_> {
     }
 }
 
-impl<'a> Format<'a> for AnyJsxTagWithChildren<'a, '_> {
-    fn fmt(&self, f: &mut Formatter<'_, 'a>) {
+impl<'a> Format<'a, JsFormatContext<'a>> for AnyJsxTagWithChildren<'a, '_> {
+    fn fmt(&self, f: &mut JsFormatter<'_, 'a>) {
         let is_suppressed = f.comments().is_suppressed(self.span().start);
 
         let format_tag = format_with(|f| {
@@ -213,15 +239,18 @@ impl<'a> Format<'a> for AnyJsxTagWithChildren<'a, '_> {
 
 /// This is a very special situation where we're returning a JsxElement
 /// from an arrow function that's passed as an argument to a function,
-/// which is itself inside a JSX expression child.
+/// which is itself inside a JSX expression container.
 ///
-/// If you're wondering why this is the only other case, it's because
-/// Prettier defines it to be that way.
+/// This matches Prettier's `shouldBreakJsxElement` behavior.
 ///
 /// ```jsx
-///  let bar = <div>
-///    {foo(() => <div> the quick brown fox jumps over the lazy dog </div>)}
-///  </div>;
+/// // As JSX child:
+/// let bar = <div>
+///   {foo(() => <div> the quick brown fox jumps over the lazy dog </div>)}
+/// </div>;
+///
+/// // As JSX attribute:
+/// <Tooltip title={[].map(name => (<Foo>{name}</Foo>))} />;
 /// ```
 pub fn should_expand(mut parent: &AstNodes<'_>) -> bool {
     if let AstNodes::ExpressionStatement(stmt) = parent {
@@ -229,22 +258,21 @@ pub fn should_expand(mut parent: &AstNodes<'_>) -> bool {
         // to determine if it should expand.
         parent = stmt.grand_parent();
     }
-    let maybe_jsx_expression_child = match parent {
-        AstNodes::ArrowFunctionExpression(arrow) if arrow.expression => match arrow.parent {
-            AstNodes::CallExpression(call) => call.parent,
+    let maybe_jsx_expression_container = match parent {
+        AstNodes::ArrowFunctionExpression(arrow) if arrow.expression => match arrow.parent() {
+            AstNodes::CallExpression(call) => call.parent(),
             _ => return false,
         },
         _ => return false,
     };
     matches!(
-        maybe_jsx_expression_child.without_chain_expression(),
-        AstNodes::JSXExpressionContainer(container)
-        if matches!(container.parent, AstNodes::JSXElement(_) | AstNodes::JSXFragment(_))
+        maybe_jsx_expression_container.without_chain_expression(),
+        AstNodes::JSXExpressionContainer(_)
     )
 }
 
 impl<'a, 'b> AnyJsxTagWithChildren<'a, 'b> {
-    fn fmt_opening(&self, f: &mut Formatter<'_, 'a>) {
+    fn fmt_opening(&self, f: &mut JsFormatter<'_, 'a>) {
         match self {
             Self::Element(element) => {
                 let is_self_closing = element.closing_element().is_none();
@@ -258,7 +286,7 @@ impl<'a, 'b> AnyJsxTagWithChildren<'a, 'b> {
         }
     }
 
-    fn fmt_closing(&self, f: &mut Formatter<'_, 'a>) {
+    fn fmt_closing(&self, f: &mut JsFormatter<'_, 'a>) {
         match self {
             Self::Element(element) => {
                 write!(f, element.closing_element());
@@ -278,12 +306,12 @@ impl<'a, 'b> AnyJsxTagWithChildren<'a, 'b> {
 
     fn parent(&self) -> &'b AstNodes<'a> {
         match self {
-            Self::Element(element) => element.parent,
-            Self::Fragment(fragment) => fragment.parent,
+            Self::Element(element) => element.parent(),
+            Self::Fragment(fragment) => fragment.parent(),
         }
     }
 
-    fn needs_parentheses(&self, f: &Formatter<'_, 'a>) -> bool {
+    fn needs_parentheses(&self, f: &JsFormatter<'_, 'a>) -> bool {
         match self {
             Self::Element(element) => element.needs_parentheses(f),
             Self::Fragment(fragment) => fragment.needs_parentheses(f),

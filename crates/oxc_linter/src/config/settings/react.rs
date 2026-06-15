@@ -1,9 +1,10 @@
 use std::{borrow::Cow, fmt};
 
 use lazy_regex::{Lazy, Regex, lazy_regex};
-use oxc_span::CompactStr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de};
+
+use oxc_str::CompactStr;
 
 /// Regex to validate React version strings like "18.2.0", "17.0", or "16".
 static REACT_VERSION_REGEX: Lazy<Regex> =
@@ -80,6 +81,23 @@ pub struct ReactPluginSettings {
     #[validate(regex = "REACT_VERSION_REGEX")]
     #[schemars(with = "Option<String>")]
     pub version: Option<ReactVersion>,
+
+    /// Functions that wrap React components and should be treated as HOCs.
+    ///
+    /// Example:
+    ///
+    /// ```jsonc
+    /// {
+    ///   "settings": {
+    ///     "react": {
+    ///       "componentWrapperFunctions": ["observer", "withRouter"]
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    #[serde(default)]
+    #[serde(rename = "componentWrapperFunctions")]
+    component_wrapper_functions: Vec<CompactStr>,
     // TODO: More properties should be added
 }
 
@@ -91,6 +109,10 @@ impl ReactPluginSettings {
 
     pub fn get_link_component_attrs(&self, name: &str) -> Option<ComponentAttrs<'_>> {
         get_component_attrs_by_name(&self.link_components, name)
+    }
+
+    pub fn is_component_wrapper_function(&self, name: &str) -> bool {
+        self.component_wrapper_functions.iter().any(|func| func == name)
     }
 }
 

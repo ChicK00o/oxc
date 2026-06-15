@@ -935,16 +935,16 @@ fn test() {
             ",
             None,
         ),
-        // (
-        //     "
-        // namespace foo.bar {
-        //   export interface User {
-        //     name: string;
-        //   }
-        // }
-        //     ",
-        //     None,
-        // ),
+        (
+            "
+        namespace foo.bar {
+          export interface User {
+            name: string;
+          }
+        }
+            ",
+            None,
+        ),
         // exported self-referencing types
         (
             "
@@ -1127,7 +1127,7 @@ fn test() {
             "
         declare module 'foo' {
           type Test = 1;
-          const x: Test = 1;
+          const x: Test;
           export = x;
         }
             ",
@@ -1407,6 +1407,82 @@ fn test() {
             ",
             None,
         ),
+        // https://github.com/oxc-project/oxc/issues/17927
+        // https://github.com/typescript-eslint/typescript-eslint/issues/10746
+        // Namespace should not be flagged as unused when shadowed by type parameter
+        // but used in a qualified name
+        (
+            "
+        namespace Database {
+          export type Table<T> = T;
+        }
+
+        export function test<Database, Table extends Database.Table<Database>>(
+          database: Database,
+          table: Table
+        ): { database: Database; table: Table } {
+          return { database, table };
+        }
+            ",
+            None,
+        ),
+        // Namespace used in extends clause, shadowed by type parameter
+        (
+            "
+        export namespace A1 {
+          namespace T {
+            export class C<U = 1> { prop: U }
+          }
+          export class Foo<T> extends T.C { prop2: T }
+        }
+            ",
+            None,
+        ),
+        // Namespace used in type alias, shadowed by type parameter
+        (
+            "
+        export namespace One {
+          namespace T {
+            export type Foo<U = 1> = U;
+          }
+          export type Bar<T> = T.Foo<T>;
+        }
+            ",
+            None,
+        ),
+        // Deeply nested qualified name with shadowing
+        (
+            "
+        namespace A {
+          export namespace B {
+            export type C<T> = T;
+          }
+        }
+        export type Test<A> = A.B.C<A>;
+            ",
+            None,
+        ),
+        // Import namespace used in implements clause, shadowed by type parameter
+        (
+            "
+        import type * as NS from 'foo';
+        export class Bar<NS> implements NS.Foo {
+          value: NS;
+        }
+            ",
+            None,
+        ),
+        (
+            "
+        const foo = { KEY: 'token' };
+        declare function Inject(token: unknown): ParameterDecorator;
+
+        export class C {
+          constructor(@Inject(foo.KEY) private readonly foo: number) {}
+        }
+            ",
+            None,
+        ),
     ];
 
     let fail = vec![
@@ -1545,14 +1621,6 @@ fn test() {
           EMAIL = 'email',
         }
             ",
-            None,
-        ),
-        (
-            "
-          import test from 'test';
-          import baz from 'baz';
-          export interface Bar extends baz.test {}
-                ",
             None,
         ),
         (
@@ -1953,9 +2021,9 @@ fn test_d_ts() {
         declare function func();
         declare enum Enum {}
         declare namespace Name {}
-        declare const v1 = 1;
-        declare var v2 = 1;
-        declare let v3 = 1;
+        declare const v1: 1;
+        declare var v2: 1;
+        declare let v3: 1;
         declare const { v4 };
         declare const { v4: v5 };
         declare const [v6];

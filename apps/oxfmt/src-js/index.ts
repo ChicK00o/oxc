@@ -1,140 +1,121 @@
-import { format as napiFormat } from "./bindings";
-import {
-  resolvePlugins,
-  formatEmbeddedCode,
-  formatFile,
-  sortTailwindClasses,
-} from "./libs/prettier";
-import type { Options } from "prettier";
-
 // napi-JS `oxfmt` API entry point
-// See also `format()` function in `./src/main_napi.rs`
+
+import {
+  formatFile,
+  formatEmbeddedCode,
+  formatEmbeddedDoc,
+  sortTailwindClasses,
+} from "./libs/apis";
+import { toFormatFileResult, toNullable } from "./libs/napi-callbacks";
+// Types are auto-generated from the JSON Schema.
+import type {
+  Oxfmtrc,
+  FormatConfig,
+  SortImportsConfig,
+  SortPackageJsonConfig,
+  SortTailwindcssConfig,
+} from "./config.generated";
+
+// --- Type exports ---
+
+// Re-export all generated config types.
+// So that downstream libraries can reference them in declaration emit without TS4058/TS4082 errors.
+export type * from "./config.generated";
+
+// The same naming convention as `oxlint` for consistency.
+// Using `interface extends` so that TypeScript displays `OxfmtConfig` in errors
+// and hovers instead of resolving to the generated `Oxfmtrc` name.
+export interface OxfmtConfig extends Oxfmtrc {}
+
+// Backward-compatible type aliases using `Options` suffix.
+
+/**
+ * Configuration options for the `format()` API.
+ *
+ * Based on `FormatConfig` generated from the JSON Schema,
+ * with additional deprecated aliases for backward compatibility.
+ * @deprecated Use `FormatConfig` instead.
+ */
+export type FormatOptions = FormatConfig & {
+  /** @deprecated Use `sortImports` instead. */
+  experimentalSortImports?: SortImportsConfig;
+  /** @deprecated Use `sortPackageJson` instead. */
+  experimentalSortPackageJson?: boolean | SortPackageJsonConfig;
+  /** @deprecated Use `sortTailwindcss` instead. */
+  experimentalTailwindcss?: SortTailwindcssConfig;
+};
+/** @deprecated Use `FormatConfig["sortImports"]` instead. */
+export type SortImportsOptions = SortImportsConfig;
+/** @deprecated Use `FormatConfig["sortPackageJson"]` instead. */
+export type SortPackageJsonOptions = SortPackageJsonConfig;
+/** @deprecated Use `FormatConfig["sortTailwindcss"]` instead. */
+export type SortTailwindcssOptions = SortTailwindcssConfig;
+/** @deprecated Use `FormatConfig["sortTailwindcss"]` instead. */
+export type TailwindcssOptions = SortTailwindcssConfig;
+
+// --- Function exports ---
+
+/**
+ * Define an oxfmt configuration with type inference.
+ */
+export function defineConfig<T extends OxfmtConfig>(config: T): T {
+  return config;
+}
+
+// NOTE: Native bindings are loaded lazily on first `format()`/`jsTextToDoc()` call,
+// instead of via a static `import "./bindings"`.
+//
+// A static import would run `requireNative()` which `dlopen`s the native `.node` addon.
+// That is wasteful (and sometimes harmful),
+// because the two paths that import this entry don't always need the binding:
+// 1. Config loading: config files do `import { defineConfig } from "oxfmt"`,
+//    where `defineConfig` is a plain identity function needing no native code.
+//    Normally the binding is already cached there (the CLI's own copy),
+//    so an eager load is just a harmless cache hit.
+//    But when a nested config resolves "oxfmt" to a separate install (its own `node_modules`),
+//    it triggers a fresh re-entrant `dlopen` on the main thread, which hangs (observed on WSL2).
+//    See https://github.com/oxc-project/oxc/issues/23125
+// 2. `jsTextToDoc` (via prettier-plugin-oxfmt, runs in the worker process where the binding is NOT preloaded):
+//    deferring the load until it's actually called avoids paying the `dlopen` cost on runs that have no embedded code to format.
+let BINDINGS_CACHE = null as typeof import("./bindings") | null;
 
 /**
  * Format the given source text according to the specified options.
  */
-export async function format(fileName: string, sourceText: string, options?: FormatOptions) {
+export async function format(fileName: string, sourceText: string, options?: FormatConfig) {
   if (typeof fileName !== "string") throw new TypeError("`fileName` must be a string");
   if (typeof sourceText !== "string") throw new TypeError("`sourceText` must be a string");
 
-  return napiFormat(
+  BINDINGS_CACHE ??= await import("./bindings");
+  return BINDINGS_CACHE.format(
     fileName,
     sourceText,
     options ?? {},
-    resolvePlugins,
-    (options, parserName, code) => formatEmbeddedCode({ options, parserName, code }),
-    (options, parserName, fileName, code) => formatFile({ options, parserName, fileName, code }),
-    (filepath, options, classes) => sortTailwindClasses({ filepath, classes, options }),
+    (options, code) => toFormatFileResult(formatFile({ options, code })),
+    (options, code) => toNullable(formatEmbeddedCode({ options, code })),
+    (options, texts) => toNullable(formatEmbeddedDoc({ options, texts })),
+    (options, classes) => toNullable(sortTailwindClasses({ options, classes })),
   );
 }
 
-// NOTE: Regarding the handwritten TypeScript types.
-//
-// Initially, I tried to use the `FormatConfig` struct to automatically generate types with `napi(object)`,
-// but since `Oxfmtrc` has many fields defined as `enum`, the API usage would look like this:
-//
-// ```ts
-// oxfmt.format("file.ts", "const a=1;", {
-//   endOfLine: oxfmt.EndOfLine.Lf,
-//   // ...
-// });
-// ```
-//
-// Since it cannot be specified with string literals, the API usability is not good.
-//
-// Therefore, I decided to just handwrite the TypeScript types.
-// There is already a mechanism to generate JSON Schema,
-// so it might be possible to generate type definitions from that.
-// TODO: in the future.
-
 /**
- * Configuration options for the `format()` API.
+ * Format a JS/TS snippet for Prettier `textToDoc()` plugin flow.
  */
-export type FormatOptions = Pick<
-  Options,
-  | "useTabs"
-  | "tabWidth"
-  | "singleQuote"
-  | "jsxSingleQuote"
-  | "quoteProps"
-  | "trailingComma"
-  | "semi"
-  | "arrowParens"
-  | "bracketSpacing"
-  | "bracketSameLine"
-  | "objectWrap"
-  | "singleAttributePerLine"
-  | "embeddedLanguageFormatting"
-  | "proseWrap"
-  | "htmlWhitespaceSensitivity"
-  | "vueIndentScriptAndStyle"
-> & {
-  /** Which end of line characters to apply. (Default: `"lf"`) */
-  endOfLine?: "lf" | "crlf" | "cr";
-  /** The line length that the printer will wrap on. (Default: `100`) */
-  printWidth?: number;
-  /** Whether to insert a final newline at the end of the file. (Default: `true`) */
-  insertFinalNewline?: boolean;
-  /** Experimental: Sort import statements. Disabled by default. */
-  experimentalSortImports?: SortImportsOptions;
-  /** Experimental: Sort `package.json` keys. (Default: `true`) */
-  experimentalSortPackageJson?: boolean;
-  /**
-   * Experimental: Enable Tailwind CSS class sorting in JSX class/className attributes.
-   * (Default: disabled)
-   */
-  experimentalTailwindcss?: TailwindcssOptions;
-} & Record<string, unknown>; // Also allow additional options for we don't have typed yet.
-
-/**
- * Configuration options for sort imports.
- */
-export type SortImportsOptions = {
-  /** Partition imports by newlines. (Default: `false`) */
-  partitionByNewline?: boolean;
-  /** Partition imports by comments. (Default: `false`) */
-  partitionByComment?: boolean;
-  /** Sort side-effect imports. (Default: `false`) */
-  sortSideEffects?: boolean;
-  /** Sort order. (Default: `"asc"`) */
-  order?: "asc" | "desc";
-  /** Ignore case when sorting. (Default: `true`) */
-  ignoreCase?: boolean;
-  /** Add newlines between import groups. (Default: `true`) */
-  newlinesBetween?: boolean;
-  /** Prefixes to identify internal imports. (Default: `["~/", "@/"]`) */
-  internalPattern?: string[];
-  /**
-   * Groups configuration for organizing imports.
-   * Each array element represents a group, and multiple group names in the same array are treated as one.
-   * Accepts both `string` and `string[]` as group elements.
-   */
-  groups?: (string | string[])[];
-  /** Define custom groups for matching specific imports. */
-  customGroups?: { groupName: string; elementNamePattern: string[] }[];
-};
-
-/**
- * Configuration options for Tailwind CSS class sorting.
- * See https://github.com/tailwindlabs/prettier-plugin-tailwindcss#options
- */
-export type TailwindcssOptions = {
-  /** Path to Tailwind config file (v3). e.g., `"./tailwind.config.js"` */
-  config?: string;
-  /** Path to Tailwind stylesheet (v4). e.g., `"./src/app.css"` */
-  stylesheet?: string;
-  /**
-   * List of custom function names whose arguments should be sorted.
-   * e.g., `["clsx", "cva", "tw"]` (Default: `[]`)
-   */
-  functions?: string[];
-  /**
-   * List of additional HTML/JSX attributes to sort (beyond `class` and `className`).
-   * e.g., `["myClassProp", ":class"]` (Default: `[]`)
-   */
-  attributes?: string[];
-  /** Preserve whitespace around classes. (Default: `false`) */
-  preserveWhitespace?: boolean;
-  /** Preserve duplicate classes. (Default: `false`) */
-  preserveDuplicates?: boolean;
-};
+export async function jsTextToDoc(
+  sourceExt: string,
+  sourceText: string,
+  oxfmtPluginOptionsJson: string,
+  parentContext: string,
+) {
+  BINDINGS_CACHE ??= await import("./bindings");
+  return BINDINGS_CACHE.jsTextToDoc(
+    sourceExt,
+    sourceText,
+    oxfmtPluginOptionsJson,
+    parentContext,
+    () => toFormatFileResult(Promise.reject("formatFile is unavailable for jsTextToDoc")),
+    (options, code) => toNullable(formatEmbeddedCode({ options, code })),
+    (options, texts) => toNullable(formatEmbeddedDoc({ options, texts })),
+    (options, classes) => toNullable(sortTailwindClasses({ options, classes })),
+  );
+}

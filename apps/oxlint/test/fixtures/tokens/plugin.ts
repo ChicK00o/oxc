@@ -1,6 +1,6 @@
 import assert from "node:assert";
 
-import type { Plugin, Rule } from "#oxlint";
+import type { Plugin, Rule } from "#oxlint/plugins";
 
 const STANDARD_TOKEN_KEYS = new Set(["type", "value", "start", "end", "range", "loc"]);
 
@@ -13,11 +13,19 @@ const rule: Rule = {
 
     const { ast } = sourceCode;
 
+    // Ensure that `bom.js` does have a BOM (guarding against it being accidentally removed by e.g. formatting)
+    if (context.filename.endsWith("bom.js")) assert(sourceCode.hasBOM);
+
     for (const tokenOrComment of tokensAndComments) {
       // Check getting `range` / `loc` properties twice results in same objects
       const { range, loc } = tokenOrComment;
-      assert(range === tokenOrComment.range);
-      assert(loc === tokenOrComment.loc);
+      assert(tokenOrComment.range === range);
+      assert(tokenOrComment.loc === loc);
+
+      // Cloning comment with spread should include `loc` and it should be the same object
+      const clone = { ...tokenOrComment };
+      assert(Object.hasOwn(clone, "loc"));
+      assert(clone.loc === loc);
 
       // Check `getRange` and `getLoc` return the same objects too
       assert(sourceCode.getRange(tokenOrComment) === range);
@@ -84,6 +92,15 @@ const rule: Rule = {
       }
 
       context.report({ message, node: token });
+    }
+
+    // Check `JSON.stringify` on tokens includes `loc`
+    const firstToken = ast.tokens[0];
+    if (firstToken) {
+      context.report({
+        message: `Token JSON.stringify:\n${JSON.stringify(firstToken, null, 2)}`,
+        node: firstToken,
+      });
     }
 
     return {};

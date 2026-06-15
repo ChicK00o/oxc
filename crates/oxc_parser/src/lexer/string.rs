@@ -2,10 +2,10 @@ use std::cmp::max;
 
 use oxc_allocator::StringBuilder;
 
-use crate::diagnostics;
+use crate::{config::LexerConfig as Config, diagnostics};
 
 use super::{
-    Kind, Lexer, LexerContext, Span, Token, cold_branch,
+    Kind, Lexer, Span, Token, cold_branch,
     search::{SafeByteMatchTable, byte_search, safe_byte_match_table},
 };
 
@@ -52,11 +52,6 @@ macro_rules! handle_string_literal {
     ($lexer:ident, $delimiter:literal, $table:ident, $escaped_table:ident) => {{
         debug_assert!($delimiter.is_ascii());
 
-        if $lexer.context == LexerContext::JsxAttributeValue {
-            // SAFETY: Caller guarantees `$delimiter` is ASCII, and next char is ASCII
-            return $lexer.read_jsx_string_literal($delimiter);
-        }
-
         // Skip opening quote.
         // SAFETY: Caller guarantees next byte is ASCII, so safe to advance past it.
         let after_opening_quote = $lexer.source.position().add(1);
@@ -67,8 +62,13 @@ macro_rules! handle_string_literal {
             table: $table,
             start: after_opening_quote,
             handle_eof: {
-                $lexer.error(diagnostics::unterminated_string($lexer.unterminated_range()));
-                return Kind::Undetermined;
+                // Unterminated string is invalid JS, so a cold path. Building the diagnostic
+                // out-of-line keeps the `OxcDiagnostic` return buffer out of this handler's
+                // stack frame (matching the sibling `\\` and line-break arms below).
+                return cold_branch(|| {
+                    $lexer.error(diagnostics::unterminated_string($lexer.unterminated_range()));
+                    Kind::Undetermined
+                });
             },
         };
 
@@ -202,7 +202,7 @@ macro_rules! handle_string_literal_escape {
 }
 
 /// 12.9.4 String Literals
-impl<'a> Lexer<'a> {
+impl<'a, C: Config> Lexer<'a, C> {
     /// Read string literal delimited with `"`.
     /// # SAFETY
     /// Next character must be `"`.

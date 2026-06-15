@@ -4,6 +4,30 @@ All notable changes to this package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0).
 
+## [0.135.0] - 2026-06-08
+
+### 🚀 Features
+
+- b846ab2 react_compiler: Integrate the Rust port of the React Compiler (#22942) (Boshen)
+
+## [0.130.0] - 2026-05-11
+
+### 📚 Documentation
+
+- 9305373 oxc: Update README (#22178) (camc314)
+
+## [0.125.0] - 2026-04-13
+
+### 🚀 Features
+
+- 75663c0 semantic: Add enum member value evaluation for const enum support (#20602) (Dunqing)
+
+## [0.111.0] - 2026-01-26
+
+### 💥 BREAKING CHANGES
+
+- 30a4899 oxc: [**BREAKING**] Remove `CompilerInterface::semantic_child_scope_ids` (#18361) (Dunqing)
+
 ## [0.106.0] - 2025-12-29
 
 ### 🚀 Features

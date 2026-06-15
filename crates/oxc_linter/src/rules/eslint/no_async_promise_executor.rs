@@ -9,7 +9,9 @@ use oxc_span::Span;
 use crate::{AstNode, context::LintContext, rule::Rule};
 
 fn no_async_promise_executor_diagnostic(span: Span) -> OxcDiagnostic {
-    OxcDiagnostic::warn("Promise executor functions should not be `async`.").with_label(span)
+    OxcDiagnostic::warn("Promise executor functions should not be `async`.")
+        .with_help("Remove the `async` keyword from the Promise executor function.")
+        .with_label(span)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -78,7 +80,9 @@ declare_oxc_lint!(
     /// ```
     NoAsyncPromiseExecutor,
     eslint,
-    correctness
+    correctness,
+    version = "0.0.3",
+    short_description = "Disallow using an async function as a Promise executor.",
 );
 
 impl Rule for NoAsyncPromiseExecutor {

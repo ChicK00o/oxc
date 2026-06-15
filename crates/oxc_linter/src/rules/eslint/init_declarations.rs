@@ -9,12 +9,21 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::Span;
 use schemars::JsonSchema;
-use serde_json::Value;
+use serde::Deserialize;
 
-use crate::{AstNode, context::LintContext, rule::Rule};
+use crate::{
+    AstNode,
+    context::LintContext,
+    rule::{Rule, TupleRuleConfig},
+    utils::{AlwaysNever, has_ambient_typescript_ancestor},
+};
 
-fn init_declarations_diagnostic(span: Span, mode: &Mode, identifier_name: &str) -> OxcDiagnostic {
-    let msg = if Mode::Always == *mode {
+fn init_declarations_diagnostic(
+    span: Span,
+    mode: &AlwaysNever,
+    identifier_name: &str,
+) -> OxcDiagnostic {
+    let msg = if &AlwaysNever::Always == mode {
         format!("Variable '{identifier_name}' should be initialized on declaration.")
     } else {
         format!("Variable '{identifier_name}' should not be initialized on declaration.")
@@ -24,26 +33,13 @@ fn init_declarations_diagnostic(span: Span, mode: &Mode, identifier_name: &str) 
         .with_label(span)
 }
 
-#[derive(Debug, Default, PartialEq, Clone, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-enum Mode {
-    #[default]
-    Always,
-    Never,
-}
-
-impl Mode {
-    pub fn from(raw: &str) -> Self {
-        if raw == "never" { Self::Never } else { Self::Always }
-    }
-}
-
-#[derive(Debug, Default, Clone, JsonSchema)]
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct InitDeclarations {
-    /// When set to `"always"` (default), requires that variables be initialized on declaration.
-    /// When set to `"never"`, disallows initialization during declaration.
-    mode: Mode,
+pub struct InitDeclarations(AlwaysNever, InitDeclarationsConfig);
+
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub struct InitDeclarationsConfig {
     /// When set to `true`, allows uninitialized variables in the init expression of `for`, `for-in`, and `for-of` loops.
     /// Only applies when mode is set to `"never"`.
     ignore_for_loop_init: bool,
@@ -52,7 +48,7 @@ pub struct InitDeclarations {
 declare_oxc_lint!(
     /// ### What it does
     ///
-    /// Require or disallow initialization in variable declarations
+    /// Require or disallow initialization in variable declarations.
     ///
     /// ### Why is this bad?
     ///
@@ -121,36 +117,25 @@ declare_oxc_lint!(
     eslint,
     style,
     config = InitDeclarations,
+    version = "0.15.11",
+    short_description = "Require or disallow initialization in variable declarations.",
 );
 
 impl Rule for InitDeclarations {
-    fn from_configuration(value: Value) -> Result<Self, serde_json::error::Error> {
-        let obj1 = value.get(0);
-        let obj2 = value.get(1);
-
-        Ok(Self {
-            mode: obj1.and_then(Value::as_str).map(Mode::from).unwrap_or_default(),
-            ignore_for_loop_init: obj2
-                .and_then(|v| v.get("ignoreForLoopInit"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        })
+    fn from_configuration(value: serde_json::Value) -> Result<Self, serde_json::error::Error> {
+        serde_json::from_value::<TupleRuleConfig<Self>>(value).map(TupleRuleConfig::into_inner)
     }
 
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
         if let AstKind::VariableDeclaration(decl) = node.kind() {
+            let InitDeclarations(mode, config) = &self;
             let parent = ctx.nodes().parent_node(node.id());
             // support for TypeScript's declare variables
-            if self.mode == Mode::Always {
+            if mode == &AlwaysNever::Always {
                 if decl.declare {
                     return;
                 }
-                let declare = ctx.nodes().ancestor_kinds(node.id()).any(|el| match el {
-                    AstKind::TSModuleDeclaration(ts_module_decl) => ts_module_decl.declare,
-                    AstKind::TSGlobalDeclaration(ts_global_decl) => ts_global_decl.declare,
-                    _ => false,
-                });
-                if declare {
+                if has_ambient_typescript_ancestor(node.id(), ctx.nodes()) {
                     return;
                 }
             }
@@ -172,21 +157,21 @@ impl Rule for InitDeclarations {
                     _ => v.init.is_some(),
                 };
 
-                match self.mode {
-                    Mode::Always if !is_initialized => {
+                match mode {
+                    AlwaysNever::Always if !is_initialized => {
                         ctx.diagnostic(init_declarations_diagnostic(
                             v.span,
-                            &self.mode,
+                            mode,
                             identifier.name.as_str(),
                         ));
                     }
-                    Mode::Never if is_initialized && !self.ignore_for_loop_init => {
+                    AlwaysNever::Never if is_initialized && !config.ignore_for_loop_init => {
                         if matches!(&v.kind, VariableDeclarationKind::Const) {
                             continue;
                         }
                         ctx.diagnostic(init_declarations_diagnostic(
                             v.span,
-                            &self.mode,
+                            mode,
                             identifier.name.as_str(),
                         ));
                     }
@@ -213,6 +198,8 @@ fn test() {
         ("for (var foo of []) {}", None), // { "ecmaVersion": 6 },
         ("let a = true;", Some(serde_json::json!(["always"]))), // { "ecmaVersion": 6 },
         ("const a = {};", Some(serde_json::json!(["always"]))), // { "ecmaVersion": 6 },
+        ("using a = foo();", Some(serde_json::json!(["always"]))), // { "ecmaVersion": 2026 },
+        ("await using a = foo();", Some(serde_json::json!(["always"]))), // { "ecmaVersion": 2026 },
         (
             "function foo() { let a = 1, b = false; if (a) { let c = 3, d = null; } }",
             Some(serde_json::json!(["always"])),
@@ -336,6 +323,14 @@ fn test() {
             }",
             Some(serde_json::json!(["never"])),
         ),
+        (
+            "declare module 'pkg' {
+                global {
+                    var nestedGlobal: string;
+                }
+            }",
+            Some(serde_json::json!(["always"])),
+        ),
     ];
 
     let fail = vec![
@@ -400,6 +395,15 @@ fn test() {
                     }
                 }
             }",
+            Some(serde_json::json!(["always"])),
+        ),
+        (
+            "
+                  declare namespace myLib {
+                    let valueInside: number;
+                  }
+                    let valueOutside: number;
+                        ",
             Some(serde_json::json!(["always"])),
         ),
     ];

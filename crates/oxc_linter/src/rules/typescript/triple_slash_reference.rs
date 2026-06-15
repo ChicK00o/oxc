@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     context::{ContextHost, LintContext},
     rule::{DefaultRuleConfig, Rule},
+    utils::AlwaysNever,
 };
 
 fn triple_slash_reference_diagnostic(ref_kind: &str, span: Span) -> OxcDiagnostic {
@@ -24,21 +25,11 @@ pub struct TripleSlashReference(Box<TripleSlashReferenceConfig>);
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct TripleSlashReferenceConfig {
     /// What to enforce for `/// <reference lib="..." />` references.
-    lib: LibOption,
+    lib: AlwaysNever,
     /// What to enforce for `/// <reference path="..." />` references.
     path: PathOption,
     /// What to enforce for `/// <reference types="..." />` references.
     types: TypesOption,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-enum LibOption {
-    /// Allow triple-slash `lib` references.
-    #[default]
-    Always,
-    /// Disallow triple-slash `lib` references.
-    Never,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -98,6 +89,8 @@ declare_oxc_lint!(
     typescript,
     correctness,
     config = TripleSlashReferenceConfig,
+    version = "0.2.0",
+    short_description = "Disallow certain triple slash directives in favor of ES module import declarations.",
 );
 
 impl Rule for TripleSlashReference {
@@ -118,7 +111,7 @@ impl Rule for TripleSlashReference {
             if let Some((group1, group2)) = get_attr_key_and_value(raw) {
                 if (group1 == "types" && self.types == TypesOption::Never)
                     || (group1 == "path" && self.path == PathOption::Never)
-                    || (group1 == "lib" && self.lib == LibOption::Never)
+                    || (group1 == "lib" && self.lib == AlwaysNever::Never)
                 {
                     ctx.diagnostic(triple_slash_reference_diagnostic(&group2, comment.span));
                 }
@@ -143,8 +136,7 @@ impl Rule for TripleSlashReference {
                             }
                         }
                         TSModuleReference::IdentifierReference(_)
-                        | TSModuleReference::QualifiedName(_)
-                        | TSModuleReference::ThisExpression(_) => {}
+                        | TSModuleReference::QualifiedName(_) => {}
                     },
                     Statement::ImportDeclaration(decl) => {
                         if let Some(v) = refs_for_import.get(decl.source.value.as_str()) {
@@ -212,109 +204,109 @@ fn test() {
     let pass = vec![
         (
             r#"
-        	        // <reference path="foo" />
-        	        // <reference types="bar" />
-        	        // <reference lib="baz" />
-        	        import * as foo from 'foo';
-        	        import * as bar from 'bar';
-        	        import * as baz from 'baz';
-        	      "#,
-            Some(serde_json::json!([{ "path": "never", "types": "never", "lib": "never" }])),
+                    // <reference path="foo" />
+                    // <reference types="bar" />
+                    // <reference lib="baz" />
+                    import * as foo from 'foo';
+                    import * as bar from 'bar';
+                    import * as baz from 'baz';
+                  "#,
+            Some(serde_json::json!([{ "lib": "never", "path": "never", "types": "never" }])),
         ),
         (
             r#"
-        	        // <reference path="foo" />
-        	        // <reference types="bar" />
-        	        // <reference lib="baz" />
-        	        import foo = require('foo');
-        	        import bar = require('bar');
-        	        import baz = require('baz');
-        	      "#,
-            Some(serde_json::json!([{ "path": "never", "types": "never", "lib": "never" }])),
+                    // <reference path="foo" />
+                    // <reference types="bar" />
+                    // <reference lib="baz" />
+                    import foo = require('foo');
+                    import bar = require('bar');
+                    import baz = require('baz');
+                  "#,
+            Some(serde_json::json!([{ "lib": "never", "path": "never", "types": "never" }])),
         ),
         (
             r#"
-        	        /// <reference path="foo" />
-        	        /// <reference types="bar" />
-        	        /// <reference lib="baz" />
-        	        import * as foo from 'foo';
-        	        import * as bar from 'bar';
-        	        import * as baz from 'baz';
-        	      "#,
-            Some(serde_json::json!([{ "path": "always", "types": "always", "lib": "always" }])),
+                    /// <reference path="foo" />
+                    /// <reference types="bar" />
+                    /// <reference lib="baz" />
+                    import * as foo from 'foo';
+                    import * as bar from 'bar';
+                    import * as baz from 'baz';
+                  "#,
+            Some(serde_json::json!([{ "lib": "always", "path": "always", "types": "always" }])),
         ),
         (
             r#"
-        	        /// <reference path="foo" />
-        	        /// <reference types="bar" />
-        	        /// <reference lib="baz" />
-        	        import foo = require('foo');
-        	        import bar = require('bar');
-        	        import baz = require('baz');
-        	      "#,
-            Some(serde_json::json!([{ "path": "always", "types": "always", "lib": "always" }])),
+                    /// <reference path="foo" />
+                    /// <reference types="bar" />
+                    /// <reference lib="baz" />
+                    import foo = require('foo');
+                    import bar = require('bar');
+                    import baz = require('baz');
+                  "#,
+            Some(serde_json::json!([{ "lib": "always", "path": "always", "types": "always" }])),
         ),
         (
             r#"
-        	        /// <reference path="foo" />
-        	        /// <reference types="bar" />
-        	        /// <reference lib="baz" />
-        	        import foo = foo;
-        	        import bar = bar;
-        	        import baz = baz;
-        	      "#,
-            Some(serde_json::json!([{ "path": "always", "types": "always", "lib": "always" }])),
+                    /// <reference path="foo" />
+                    /// <reference types="bar" />
+                    /// <reference lib="baz" />
+                    import foo = foo;
+                    import bar = bar;
+                    import baz = baz;
+                  "#,
+            Some(serde_json::json!([{ "lib": "always", "path": "always", "types": "always" }])),
         ),
         (
             r#"
-        	        /// <reference path="foo" />
-        	        /// <reference types="bar" />
-        	        /// <reference lib="baz" />
-        	        import foo = foo.foo;
-        	        import bar = bar.bar.bar.bar;
-        	        import baz = baz.baz;
-        	      "#,
-            Some(serde_json::json!([{ "path": "always", "types": "always", "lib": "always" }])),
+                    /// <reference path="foo" />
+                    /// <reference types="bar" />
+                    /// <reference lib="baz" />
+                    import foo = foo.foo;
+                    import bar = bar.bar.bar.bar;
+                    import baz = baz.baz;
+                  "#,
+            Some(serde_json::json!([{ "lib": "always", "path": "always", "types": "always" }])),
         ),
-        (r"import * as foo from 'foo';", Some(serde_json::json!([{ "path": "never" }]))),
-        (r"import foo = require('foo');", Some(serde_json::json!([{ "path": "never" }]))),
-        (r"import * as foo from 'foo';", Some(serde_json::json!([{ "types": "never" }]))),
-        (r"import foo = require('foo');", Some(serde_json::json!([{ "types": "never" }]))),
-        (r"import * as foo from 'foo';", Some(serde_json::json!([{ "lib": "never" }]))),
-        (r"import foo = require('foo');", Some(serde_json::json!([{ "lib": "never" }]))),
-        (r"import * as foo from 'foo';", Some(serde_json::json!([{ "types": "prefer-import" }]))),
-        (r"import foo = require('foo');", Some(serde_json::json!([{ "types": "prefer-import" }]))),
+        ("import * as foo from 'foo';", Some(serde_json::json!([{ "path": "never" }]))),
+        ("import foo = require('foo');", Some(serde_json::json!([{ "path": "never" }]))),
+        ("import * as foo from 'foo';", Some(serde_json::json!([{ "types": "never" }]))),
+        ("import foo = require('foo');", Some(serde_json::json!([{ "types": "never" }]))),
+        ("import * as foo from 'foo';", Some(serde_json::json!([{ "lib": "never" }]))),
+        ("import foo = require('foo');", Some(serde_json::json!([{ "lib": "never" }]))),
+        ("import * as foo from 'foo';", Some(serde_json::json!([{ "types": "prefer-import" }]))),
+        ("import foo = require('foo');", Some(serde_json::json!([{ "types": "prefer-import" }]))),
         (
             r#"
-        	        /// <reference types="foo" />
-        	        import * as bar from 'bar';
-        	      "#,
+                    /// <reference types="foo" />
+                    import * as bar from 'bar';
+                  "#,
             Some(serde_json::json!([{ "types": "prefer-import" }])),
         ),
         (
             r#"
-        	        /*
-        	        /// <reference types="foo" />
-        	        */
-        	        import * as foo from 'foo';
-        	      "#,
-            Some(serde_json::json!([{ "path": "never", "types": "never", "lib": "never" }])),
+                    /*
+                    /// <reference types="foo" />
+                    */
+                    import * as foo from 'foo';
+                  "#,
+            Some(serde_json::json!([{ "lib": "never", "path": "never", "types": "never" }])),
         ),
     ];
 
     let fail = vec![
         (
             r#"
-			/// <reference types="foo" />
-			import * as foo from 'foo';
-			      "#,
+            /// <reference types="foo" />
+            import * as foo from 'foo';
+                  "#,
             Some(serde_json::json!([{ "types": "prefer-import" }])),
         ),
         (
             r#"
-        	/// <reference types="foo" />
-        	import foo = require('foo');
-        	      "#,
+            /// <reference types="foo" />
+            import foo = require('foo');
+                  "#,
             Some(serde_json::json!([{ "types": "prefer-import" }])),
         ),
         (r#"/// <reference path="foo" />"#, Some(serde_json::json!([{ "path": "never" }]))),

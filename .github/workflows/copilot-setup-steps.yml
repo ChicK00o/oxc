@@ -24,17 +24,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checkout full repo for git history.
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
-      - uses: oxc-project/setup-rust@c8224157c0bf235aabc633e8cd50d344f087a7de # v1.0.12
+      - uses: oxc-project/setup-rust@3d6fb132fbe7cdcb66bf8ec193911c2945369d12 # v1.0.17
         with:
           cache-key: warm
           save-cache: false
-          tools: just,cargo-insta,typos-cli,cargo-shear,ast-grep
+          tools: just,cargo-insta,typos-cli,cargo-shear@1.12.4,ast-grep
           components: clippy rust-docs rustfmt rust-analyzer
 
-      - uses: oxc-project/setup-node@8958a8e040102244b619c4a94fccb657a44b1c21 # v1.0.6
-
-      - run: pnpm run --filter mcp-oxc build
+      - uses: oxc-project/setup-node@4c588e9266bd930b6ddc34307df0659ed511d187 # v1.3.1

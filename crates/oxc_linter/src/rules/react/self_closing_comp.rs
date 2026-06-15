@@ -73,6 +73,8 @@ declare_oxc_lint!(
     style,
     fix,
     config = SelfClosingComp,
+    version = "0.9.3",
+    short_description = "Detects components without children which can be self-closed to avoid unnecessary extra closing tags.",
 );
 
 impl Rule for SelfClosingComp {
@@ -355,6 +357,7 @@ fn test() {
             Some(serde_json::json!([{ "html": true }])),
         ),
     ];
+
     Tester::new(SelfClosingComp::NAME, SelfClosingComp::PLUGIN, pass, fail)
         .expect_fix(fix)
         .test_and_snapshot();

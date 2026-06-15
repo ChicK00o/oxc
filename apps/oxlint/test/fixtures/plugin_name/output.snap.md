@@ -80,7 +80,7 @@
    : ^^^^^^^^^^^^^^^^^^^^^^^
    `----
 
-  x eslint-plugin-jsdoc(require-param): Missing JSDoc `@param` declaration for function parameters.
+  x jsdoc(require-param): Missing JSDoc `@param` declaration for function parameters.
    ,-[files/index.js:4:17]
  3 |  */
  4 | function f(foo, bar) {}
@@ -94,6 +94,4 @@ Finished in Xms on 1 file with 12 rules using X threads.
 
 # stderr
 ```
-WARNING: JS plugins are experimental and not subject to semver.
-Breaking changes are possible while JS plugins support is under development.
 ```

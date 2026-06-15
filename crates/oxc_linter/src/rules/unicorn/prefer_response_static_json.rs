@@ -47,7 +47,9 @@ declare_oxc_lint!(
     PreferResponseStaticJson,
     unicorn,
     style,
-    suggestion
+    suggestion,
+    version = "1.29.0",
+    short_description = "Enforces the use of `Response.json()` over `new Response(JSON.stringify())`.",
 );
 
 impl Rule for PreferResponseStaticJson {
@@ -172,18 +174,18 @@ fn test() {
         "new Response(JSON.stringify(data), extraArgument)",
         "new Response( (( JSON.stringify( (( 0, data )), ) )), )",
         "function foo() {
-				return new // comment
-					Response(JSON.stringify(data))
-			}",
+                return new // comment
+                    Response(JSON.stringify(data))
+            }",
         "new Response(JSON.stringify(data), {status: 200})",
         "foo
-			new (( Response ))(JSON.stringify(data))",
+            new (( Response ))(JSON.stringify(data))",
         "foo;
-			new (( Response ))(JSON.stringify(data))",
+            new (( Response ))(JSON.stringify(data))",
         "foo;
-			(( new (( Response ))(JSON.stringify(data)) ))",
+            (( new (( Response ))(JSON.stringify(data)) ))",
         "foo
-			(( new (( Response ))(JSON.stringify(data)) ))",
+            (( new (( Response ))(JSON.stringify(data)) ))",
     ];
 
     let fix = vec![
@@ -195,38 +197,38 @@ fn test() {
         ),
         (
             "function foo() {
-				return new // comment
-					Response(JSON.stringify(data))
-			}",
+                return new // comment
+                    Response(JSON.stringify(data))
+            }",
             "function foo() {
-				return ( // comment
-					Response.json(data))
-			}",
+                return ( // comment
+                    Response.json(data))
+            }",
         ),
         ("new Response(JSON.stringify(data), {status: 200})", "Response.json(data, {status: 200})"),
         (
             "foo
-			new (( Response ))(JSON.stringify(data))",
+            new (( Response ))(JSON.stringify(data))",
             "foo
-			;(( Response.json ))(data)",
+            ;(( Response.json ))(data)",
         ),
         (
             "foo;
-			new (( Response ))(JSON.stringify(data))",
+            new (( Response ))(JSON.stringify(data))",
             "foo;
-			(( Response.json ))(data)",
+            (( Response.json ))(data)",
         ),
         (
             "foo;
-			(( new (( Response ))(JSON.stringify(data)) ))",
+            (( new (( Response ))(JSON.stringify(data)) ))",
             "foo;
-			(( (( Response.json ))(data) ))",
+            (( (( Response.json ))(data) ))",
         ),
         (
             "foo
-			(( new (( Response ))(JSON.stringify(data)) ))",
+            (( new (( Response ))(JSON.stringify(data)) ))",
             "foo
-			(( (( Response.json ))(data) ))",
+            (( (( Response.json ))(data) ))",
         ),
     ];
 

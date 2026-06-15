@@ -63,8 +63,10 @@ declare_oxc_lint!(
     NoDuplicateTypeConstituents(tsgolint),
     typescript,
     correctness,
-    pending,
+    fix,
     config = NoDuplicateTypeConstituentsConfig,
+    version = "1.12.0",
+    short_description = "This rule disallows duplicate constituents of union or intersection types.",
 );
 
 impl Rule for NoDuplicateTypeConstituents {

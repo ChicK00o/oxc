@@ -49,7 +49,9 @@ declare_oxc_lint!(
     AwaitThenable(tsgolint),
     typescript,
     correctness,
-    pending,
+    suggestion,
+    version = "1.12.0",
+    short_description = "This rule disallows awaiting a value that is not a Thenable.",
 );
 
 impl Rule for AwaitThenable {}

@@ -1,8 +1,10 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use oxc_ast::{
     AstKind,
-    ast::{ArrowFunctionExpression, Expression, Statement},
+    ast::{ArrowFunctionExpression, Expression, ReturnStatement, Statement},
 };
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
@@ -13,7 +15,7 @@ use crate::{
     AstNode,
     context::LintContext,
     fixer::{RuleFix, RuleFixer},
-    rule::Rule,
+    rule::{Rule, TupleRuleConfig},
 };
 
 fn expected_block_diagnostic(span: Span) -> OxcDiagnostic {
@@ -39,7 +41,8 @@ fn unexpected_block_with_unknown_help_diagnostic(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::warn("Unexpected block statement surrounding arrow body.").with_label(span)
 }
 
-#[derive(Debug, Default, PartialEq, Clone)]
+#[derive(Debug, Default, PartialEq, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 enum Mode {
     #[default]
     AsNeeded,
@@ -47,19 +50,13 @@ enum Mode {
     Never,
 }
 
-impl Mode {
-    pub fn from(raw: &str) -> Self {
-        match raw {
-            "always" => Self::Always,
-            "never" => Self::Never,
-            _ => Self::AsNeeded,
-        }
-    }
-}
+#[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(default)]
+pub struct ArrowBodyStyle(Mode, ArrowBodyStyleConfig);
 
-#[derive(Debug, Default, Clone)]
-pub struct ArrowBodyStyle {
-    mode: Mode,
+#[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+struct ArrowBodyStyleConfig {
     require_return_for_object_literal: bool,
 }
 
@@ -178,7 +175,7 @@ declare_oxc_lint!(
     ///
     /// Examples of **incorrect** code for this rule with the `{ "requireReturnForObjectLiteral": true }` option:
     /// ```js
-    /// /* arrow-body-style: ["error", "as-needed", { "requireReturnForObjectLiteral": true }]*/
+    /// /* arrow-body-style: ["error", "as-needed", { "requireReturnForObjectLiteral": true }] */
     ///
     /// /* ✘ Bad: */
     /// const foo = () => ({});
@@ -187,7 +184,7 @@ declare_oxc_lint!(
     ///
     /// Examples of **correct** code for this rule with the `{ "requireReturnForObjectLiteral": true }` option:
     /// ```js
-    /// /* arrow-body-style: ["error", "as-needed", { "requireReturnForObjectLiteral": true }]*/
+    /// /* arrow-body-style: ["error", "as-needed", { "requireReturnForObjectLiteral": true }] */
     ///
     /// /* ✔ Good: */
     /// const foo = () => {};
@@ -197,19 +194,14 @@ declare_oxc_lint!(
     eslint,
     style,
     fix,
+    config = ArrowBodyStyle,
+    version = "1.4.0",
+    short_description = "Enforce consistent use of braces in arrow functions.",
 );
 
 impl Rule for ArrowBodyStyle {
     fn from_configuration(value: Value) -> Result<Self, serde_json::error::Error> {
-        let mode = value.get(0).and_then(Value::as_str).map(Mode::from).unwrap_or_default();
-
-        let require_return_for_object_literal = value
-            .get(1)
-            .and_then(|v| v.get("requireReturnForObjectLiteral"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-
-        Ok(Self { mode, require_return_for_object_literal })
+        serde_json::from_value::<TupleRuleConfig<Self>>(value).map(TupleRuleConfig::into_inner)
     }
 
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
@@ -234,11 +226,12 @@ impl ArrowBodyStyle {
         arrow_func_expr: &ArrowFunctionExpression<'a>,
         ctx: &LintContext<'a>,
     ) {
+        let ArrowBodyStyle(mode, config) = self;
         let inner_expr = arrow_func_expr.get_expression().map(Expression::get_inner_expression);
 
-        let should_report = self.mode == Mode::Always
-            || (self.mode == Mode::AsNeeded
-                && self.require_return_for_object_literal
+        let should_report = *mode == Mode::Always
+            || (*mode == Mode::AsNeeded
+                && config.require_return_for_object_literal
                 && matches!(inner_expr, Some(Expression::ObjectExpression(_))));
 
         if !should_report {
@@ -260,24 +253,33 @@ impl ArrowBodyStyle {
         node: &AstNode<'a>,
         ctx: &LintContext<'a>,
     ) {
+        let ArrowBodyStyle(mode, _config) = &self;
         let body = &arrow_func_expr.body;
 
-        match self.mode {
+        match mode {
             Mode::Never => {
                 // Mode::Never: report any block body
-                if body.statements.is_empty() {
+                if body.is_empty() {
                     // TODO: implement a fix for empty block bodies
                     ctx.diagnostic(unexpected_empty_block_diagnostic(body.span));
                     return;
                 }
 
                 // Check if we can fix (single return with argument)
-                if body.statements.len() == 1
+                if body.directives.is_empty()
+                    && body.statements.len() == 1
                     && let Statement::ReturnStatement(return_statement) = &body.statements[0]
                     && let Some(return_arg) = &return_statement.argument
                 {
                     ctx.diagnostic_with_fix(unexpected_block_diagnostic(body.span), |fixer| {
-                        Self::fix_block_to_concise(arrow_func_expr, return_arg, node, fixer, ctx)
+                        Self::fix_block_to_concise(
+                            arrow_func_expr,
+                            return_statement,
+                            return_arg,
+                            node,
+                            fixer,
+                            ctx,
+                        )
                     });
                     return;
                 }
@@ -285,10 +287,10 @@ impl ArrowBodyStyle {
                 // Cannot auto-fix other cases
                 ctx.diagnostic(unexpected_block_with_unknown_help_diagnostic(body.span));
             }
-            Mode::AsNeeded if body.statements.len() == 1 => {
+            Mode::AsNeeded if body.directives.is_empty() && body.statements.len() == 1 => {
                 if let Statement::ReturnStatement(return_statement) = &body.statements[0] {
                     // Skip if requireReturnForObjectLiteral and returning an object
-                    if self.require_return_for_object_literal
+                    if self.1.require_return_for_object_literal
                         && matches!(
                             return_statement.argument,
                             Some(Expression::ObjectExpression(_))
@@ -305,7 +307,14 @@ impl ArrowBodyStyle {
                     };
 
                     ctx.diagnostic_with_fix(unexpected_block_diagnostic(body.span), |fixer| {
-                        Self::fix_block_to_concise(arrow_func_expr, return_arg, node, fixer, ctx)
+                        Self::fix_block_to_concise(
+                            arrow_func_expr,
+                            return_statement,
+                            return_arg,
+                            node,
+                            fixer,
+                            ctx,
+                        )
                     });
                 }
             }
@@ -346,55 +355,52 @@ impl ArrowBodyStyle {
     /// `() => { return expr }` → `() => expr`
     fn fix_block_to_concise<'a>(
         arrow_func_expr: &ArrowFunctionExpression<'a>,
+        return_statement: &ReturnStatement<'a>,
         return_arg: &Expression<'a>,
         node: &AstNode<'a>,
         fixer: RuleFixer<'_, 'a>,
         ctx: &LintContext<'a>,
     ) -> RuleFix {
-        let body = &arrow_func_expr.body;
-        let return_arg_text = ctx.source_range(return_arg.span());
-
         // Get the inner expression to handle cases like `return ({ ... })`
         // where the return value is already parenthesized
         let inner_expr = return_arg.get_inner_expression();
         let is_already_parenthesized = matches!(return_arg, Expression::ParenthesizedExpression(_));
 
-        // Check if expression starts with `{` - needs parens to avoid ambiguity with blocks
-        let starts_with_object_literal = Self::starts_with_object_literal(inner_expr);
-        let is_sequence_expr = matches!(inner_expr, Expression::SequenceExpression(_));
-
-        if starts_with_object_literal {
-            if is_already_parenthesized {
-                // Already parenthesized object: `{ return ({ ... }) }` → `({ ... })`
-                // Use the full parenthesized text to preserve comments
-                return fixer.replace(body.span, return_arg_text.to_string());
-            }
-            // Bare object literal or expression starting with object needs parentheses
-            let inner_text = ctx.source_range(inner_expr.span());
-            return fixer.replace(body.span, format!("({inner_text})"));
-        }
-
-        if is_sequence_expr {
-            if is_already_parenthesized {
-                // Already parenthesized sequence: use full text
-                return fixer.replace(body.span, return_arg_text.to_string());
-            }
-            // Sequence expressions need parentheses: `{ return a, b }` → `(a, b)`
-            let inner_text = ctx.source_range(inner_expr.span());
-            return fixer.replace(body.span, format!("({inner_text})"));
-        }
-
+        // Bare object literal or expression starting with object needs parentheses
+        // Sequence expressions need parentheses: `{ return a, b }` → `(a, b)`
         // Check if we need to wrap in parentheses for `in` operator in for-loop init
-        let needs_parens = Self::needs_parens_for_concise_body(return_arg, node, ctx);
+        let needs_parens = !is_already_parenthesized
+            && (Self::starts_with_object_literal(inner_expr)
+                || matches!(inner_expr, Expression::SequenceExpression(_))
+                || Self::needs_parens_for_concise_body(return_arg, node, ctx));
 
-        if needs_parens && !is_already_parenthesized {
-            // Expression contains `in` and is in for-loop init, needs parentheses
-            fixer.replace(body.span, format!("({return_arg_text})"))
-        } else {
-            // Simple case: just use the return value directly
-            // (including if it's already parenthesized)
-            fixer.replace(body.span, return_arg_text.to_string())
+        let has_return_semicolon =
+            ctx.source_text().as_bytes()[(return_statement.span.end - 1) as usize] == b';';
+
+        let mut fix = fixer
+            .new_fix_with_capacity(if has_return_semicolon { 4 } else { 3 })
+            .with_message("Convert block body to concise body");
+
+        // Remove `return` and at most one following whitespace to preserve
+        // existing spacing, while keeping comments like `return/* comment */1` intact.
+        let source_text = ctx.source_text().as_bytes();
+        let return_end = (return_statement.span.start + 6) as usize;
+        let delete_len =
+            if source_text.get(return_end).is_some_and(u8::is_ascii_whitespace) { 7 } else { 6 };
+        fix.push(fixer.delete_range(Span::sized(return_statement.span.start, delete_len)));
+        if has_return_semicolon {
+            fix.push(fixer.delete_range(Span::sized(return_statement.span.end - 1, 1)));
         }
+        fix.push(fixer.replace(
+            Span::sized(arrow_func_expr.body.span.start, 1),
+            if needs_parens { "(" } else { "" },
+        ));
+        fix.push(fixer.replace(
+            Span::sized(arrow_func_expr.body.span.end - 1, 1),
+            if needs_parens { ")" } else { "" },
+        ));
+
+        fix
     }
 
     /// Check if an expression starts with an object literal.
@@ -563,6 +569,7 @@ fn test() {
             "var foo = () => { return { bar: 0 }; };",
             Some(serde_json::json!(["as-needed", { "requireReturnForObjectLiteral": true }])),
         ),
+        (r#"var foo = () => { "use strict"; return 0; };"#, None),
     ];
 
     let fail = vec![
@@ -726,88 +733,90 @@ fn test() {
         ("var foo = () => { return {a: 1}.b + c && d };", Some(serde_json::json!(["as-needed"]))),
         ("var foo = () => { return {a: 1}.b.c + d };", Some(serde_json::json!(["as-needed"]))),
         ("var foo = () => { return {a: 1}.b() + c };", Some(serde_json::json!(["as-needed"]))),
+        (r#"var foo = () => { "use strict"; return 0; };"#, Some(serde_json::json!(["never"]))),
+        (r#"var foo = () => { "use strict"; };"#, Some(serde_json::json!(["never"]))),
     ];
 
     let fix = vec![
         (
             "for (var foo = () => { return a in b ? bar : () => {} } ;;);",
-            "for (var foo = () => (a in b ? bar : () => {}) ;;);",
+            "for (var foo = () => ( a in b ? bar : () => {} ) ;;);",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "a in b; for (var f = () => { return c };;);",
-            "a in b; for (var f = () => c;;);",
+            "a in b; for (var f = () =>  c ;;);",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "for (a = b => { return c in d ? e : f } ;;);",
-            "for (a = b => (c in d ? e : f) ;;);",
+            "for (a = b => ( c in d ? e : f ) ;;);",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "for (var f = () => { return a };;);",
-            "for (var f = () => a;;);",
+            "for (var f = () =>  a ;;);",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "for (var f;f = () => { return a };);",
-            "for (var f;f = () => a;);",
+            "for (var f;f = () =>  a ;);",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "for (var f = () => { return a in c };;);",
-            "for (var f = () => (a in c);;);",
+            "for (var f = () => ( a in c );;);",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "for (var f;f = () => { return a in c };);",
-            "for (var f;f = () => a in c;);",
+            "for (var f;f = () =>  a in c ;);",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "for (;;){var f = () => { return a in c }}",
-            "for (;;){var f = () => a in c}",
+            "for (;;){var f = () =>  a in c }",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "for (a = b => { return c = d in e } ;;);",
-            "for (a = b => (c = d in e) ;;);",
+            "for (a = b => ( c = d in e ) ;;);",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "for (var a;;a = b => { return c = d in e } );",
-            "for (var a;;a = b => c = d in e );",
+            "for (var a;;a = b =>  c = d in e  );",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "for (let a = (b, c, d) => { return vb && c in d; }; ;);",
-            "for (let a = (b, c, d) => (vb && c in d); ;);",
+            "for (let a = (b, c, d) => ( vb && c in d ); ;);",
             None,
         ),
         (
             "for (let a = (b, c, d) => { return v in b && c in d; }; ;);",
-            "for (let a = (b, c, d) => (v in b && c in d); ;);",
+            "for (let a = (b, c, d) => ( v in b && c in d ); ;);",
             None,
         ),
         (
             "function foo(){ for (let a = (b, c, d) => { return v in b && c in d; }; ;); }",
-            "function foo(){ for (let a = (b, c, d) => (v in b && c in d); ;); }",
+            "function foo(){ for (let a = (b, c, d) => ( v in b && c in d ); ;); }",
             None,
         ),
         (
             "for ( a = (b, c, d) => { return v in b && c in d; }; ;);",
-            "for ( a = (b, c, d) => (v in b && c in d); ;);",
+            "for ( a = (b, c, d) => ( v in b && c in d ); ;);",
             None,
         ),
-        ("for ( a = (b) => { return (c in d) }; ;);", "for ( a = (b) => (c in d); ;);", None),
+        ("for ( a = (b) => { return (c in d) }; ;);", "for ( a = (b) =>  (c in d) ; ;);", None),
         (
             "for (let a = (b, c, d) => { return vb in dd ; }; ;);",
-            "for (let a = (b, c, d) => (vb in dd); ;);",
+            "for (let a = (b, c, d) => ( vb in dd  ); ;);",
             None,
         ),
         (
             "for (let a = (b, c, d) => { return vb in c in dd ; }; ;);",
-            "for (let a = (b, c, d) => (vb in c in dd); ;);",
+            "for (let a = (b, c, d) => ( vb in c in dd  ); ;);",
             None,
         ),
         (
@@ -817,17 +826,17 @@ fn test() {
         ),
         (
             "do{for (let a = (b, c, d) => { return vb in c in dd ; }; ;);}while(true){}",
-            "do{for (let a = (b, c, d) => (vb in c in dd); ;);}while(true){}",
+            "do{for (let a = (b, c, d) => ( vb in c in dd  ); ;);}while(true){}",
             None,
         ),
         (
             "scores.map(score => { return x in +(score / maxScore).toFixed(2)});",
-            "scores.map(score => x in +(score / maxScore).toFixed(2));",
+            "scores.map(score =>  x in +(score / maxScore).toFixed(2));",
             None,
         ),
         (
             "const fn = (a, b) => { return a + x in Number(b) };",
-            "const fn = (a, b) => a + x in Number(b);",
+            "const fn = (a, b) =>  a + x in Number(b) ;",
             None,
         ),
         ("var foo = () => 0", "var foo = () => {return 0}", Some(serde_json::json!(["always"]))),
@@ -846,60 +855,62 @@ fn test() {
         ("(() => ( {}))", "(() => {return {}})", Some(serde_json::json!(["always"]))),
         (
             "var foo = () => { return 0; };",
-            "var foo = () => 0;",
+            "var foo = () =>  0 ;",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return 0 };",
-            "var foo = () => 0;",
+            "var foo = () =>  0 ;",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return bar(); };",
-            "var foo = () => bar();",
+            "var foo = () =>  bar() ;",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => {
         return 0;
         };",
-            "var foo = () => 0;",
+            "var foo = () => 
+        0
+        ;",
             Some(serde_json::json!(["never"])),
         ),
         (
             "var foo = () => { return { bar: 0 }; };",
-            "var foo = () => ({ bar: 0 });",
+            "var foo = () => ( { bar: 0 } );",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return ({ bar: 0 }); };",
-            "var foo = () => ({ bar: 0 });",
+            "var foo = () =>  ({ bar: 0 }) ;",
             Some(serde_json::json!(["as-needed"])),
         ),
-        ("var foo = () => { return a, b }", "var foo = () => (a, b)", None),
+        ("var foo = () => { return a, b }", "var foo = () => ( a, b )", None),
         (
             "var foo = () => { return ( /* a */ {ok: true} /* b */ ) };",
-            "var foo = () => ( /* a */ {ok: true} /* b */ );",
+            "var foo = () =>  ( /* a */ {ok: true} /* b */ ) ;",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return '{' };",
-            "var foo = () => '{';",
+            "var foo = () =>  '{' ;",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return { bar: 0 }.bar; };",
-            "var foo = () => ({ bar: 0 }.bar);",
+            "var foo = () => ( { bar: 0 }.bar );",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return 0; };",
-            "var foo = () => 0;",
+            "var foo = () =>  0 ;",
             Some(serde_json::json!(["as-needed", { "requireReturnForObjectLiteral": true }])),
         ),
         (
             "var foo = () => { return bar(); };",
-            "var foo = () => bar();",
+            "var foo = () =>  bar() ;",
             Some(serde_json::json!(["as-needed", { "requireReturnForObjectLiteral": true }])),
         ),
         (
@@ -919,7 +930,7 @@ fn test() {
         ),
         (
             "var foo = /* a */ ( /* b */ ) /* c */ => /* d */ { /* e */ return /* f */ 5 /* g */ ; /* h */ } /* i */ ;",
-            "var foo = /* a */ ( /* b */ ) /* c */ => /* d */ 5 /* i */ ;",
+            "var foo = /* a */ ( /* b */ ) /* c */ => /* d */  /* e */ /* f */ 5 /* g */  /* h */  /* i */ ;",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
@@ -931,31 +942,37 @@ fn test() {
             "var foo = () => {
         return bar;
         };",
-            "var foo = () => bar;",
+            "var foo = () => 
+        bar
+        ;",
             None,
         ),
         (
             "var foo = () => {
         return bar;};",
-            "var foo = () => bar;",
+            "var foo = () => 
+        bar;",
             None,
         ),
         (
             "var foo = () => {return bar;
         };",
-            "var foo = () => bar;",
+            "var foo = () => bar
+        ;",
             None,
         ),
         (
             "
-                      var foo = () => {
-                        return foo
-                          .bar;
-                      };
+var foo = () => {
+  return foo
+    .bar;
+};
                     ",
             "
-                      var foo = () => foo
-                          .bar;
+var foo = () => 
+  foo
+    .bar
+;
                     ",
             None,
         ),
@@ -969,10 +986,12 @@ fn test() {
                       };
                     ",
             "
-                      var foo = () => ({
+                      var foo = () => (
+                        {
                           bar: 1,
                           baz: 2
-                        });
+                        }
+                      );
                     ",
             None,
         ),
@@ -1030,38 +1049,75 @@ fn test() {
         ),
         (
             "var foo = () => { return {a: 1}.b + c };",
-            "var foo = () => ({a: 1}.b + c);",
+            "var foo = () => ( {a: 1}.b + c );",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return {a: 1}.b && c };",
-            "var foo = () => ({a: 1}.b && c);",
+            "var foo = () => ( {a: 1}.b && c );",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return {a: 1}.b || c };",
-            "var foo = () => ({a: 1}.b || c);",
+            "var foo = () => ( {a: 1}.b || c );",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return {a: 1}.b ? c : d };",
-            "var foo = () => ({a: 1}.b ? c : d);",
+            "var foo = () => ( {a: 1}.b ? c : d );",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return {a: 1}.b + c && d };",
-            "var foo = () => ({a: 1}.b + c && d);",
+            "var foo = () => ( {a: 1}.b + c && d );",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return {a: 1}.b.c + d };",
-            "var foo = () => ({a: 1}.b.c + d);",
+            "var foo = () => ( {a: 1}.b.c + d );",
             Some(serde_json::json!(["as-needed"])),
         ),
         (
             "var foo = () => { return {a: 1}.b() + c };",
-            "var foo = () => ({a: 1}.b() + c);",
+            "var foo = () => ( {a: 1}.b() + c );",
             Some(serde_json::json!(["as-needed"])),
+        ),
+        (
+            r#"const something = () => {
+  // comment
+  return "something";
+};"#,
+            r#"const something = () => 
+  // comment
+  "something"
+;"#,
+            None,
+        ),
+        (
+            r#"const something = () => {
+  return "something";
+  // comment
+};"#,
+            r#"const something = () => 
+  "something"
+  // comment
+;"#,
+            None,
+        ),
+        (
+            "const a = () => { return/* comment */1; };",
+            "const a = () =>  /* comment */1 ;",
+            Some(serde_json::json!(["as-needed"])),
+        ),
+        (
+            r#"var foo = () => { "use strict"; return 0; };"#,
+            r#"var foo = () => { "use strict"; return 0; };"#,
+            Some(serde_json::json!(["never"])),
+        ),
+        (
+            r#"var foo = () => { "use strict"; };"#,
+            r#"var foo = () => { "use strict"; };"#,
+            Some(serde_json::json!(["never"])),
         ),
     ];
 

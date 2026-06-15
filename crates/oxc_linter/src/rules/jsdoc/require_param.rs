@@ -32,7 +32,7 @@ fn require_param_diagnostic(violations: Vec<Span>) -> OxcDiagnostic {
 pub struct RequireParam(Box<RequireParamConfig>);
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 struct RequireParamConfig {
     /// List of JSDoc tags that exempt functions from `@param` checking.
     #[serde(default = "default_exempted_by")]
@@ -100,7 +100,10 @@ declare_oxc_lint!(
     RequireParam,
     jsdoc,
     pedantic,
+    pending,
     config = RequireParamConfig,
+    version = "0.4.3",
+    short_description = "Requires that all function parameters are documented with JSDoc `@param` tags.",
 );
 
 impl Rule for RequireParam {
@@ -334,6 +337,37 @@ fn test() {
 
 			          }
 			      ", None, None),
+        (
+            "
+                      /**
+                       * @param md
+                       */
+                      const component = (md) => {
+                        md.renderer.rules.fence = (...args) => {
+                          const [tokens, index] = args;
+                          return tokens[index];
+                        };
+                      };
+                  ",
+            None,
+            None,
+        ),
+        (
+            "
+                      /**
+                       * Random float in [min, max).
+                       * @param {number} min - Minimum float value.
+                       * @param {number} max - Maximum float value.
+                       * @returns {number} Random float in [min, max).
+                       */
+                      function randomRange(min, max) {
+                        return min + Math.random() * (max - min);
+                      }
+                  ",
+            None,
+            None,
+        ),
+
 ("
 			          /**
 			           * @param root0
@@ -771,7 +805,21 @@ fn test() {
              * @type {import('node:module').ResolveHook}
              */
             async function resolveJSONC(specifier, ctx, nextResolve) {}
-        ", None, None)
+        ", None, None),
+        (
+            r#"
+			      /**
+			       * A shiki transformer.
+			       */
+			      const shikiTransformer: ShikiTransformer = {
+			        name: "example",
+			        tokens(tokens) {
+			        }
+			      };
+			      "#,
+            None,
+            None,
+        ),
     ];
 
     let fail = vec![
@@ -1395,6 +1443,21 @@ fn test() {
 			        /** Foo. */
 			        function foo(a, b, c) {}
 			      ",
+            None,
+            None,
+        ),
+        // https://github.com/oxc-project/oxc/issues/19139#issuecomment-3875380106
+        (
+            r#"
+			const shikiTransformer: ShikiTransformer = {
+				name: "example",
+				/**
+				 * A shiki transformer.
+				 */
+			        tokens(tokens) {
+			        }
+			      };
+			      "#,
             None,
             None,
         ),

@@ -5,7 +5,13 @@ import {
 } from "../bindings.js";
 import { debugAssert, debugAssertIsNonNull } from "../utils/asserts.ts";
 import { buffers } from "../plugins/lint.ts";
-import { BUFFER_SIZE, BUFFER_ALIGN, DATA_POINTER_POS_32 } from "../generated/constants.ts";
+import {
+  BLOCK_SIZE,
+  BLOCK_ALIGN,
+  BUFFER_SIZE,
+  DATA_POINTER_POS_32,
+  ACTIVE_SIZE,
+} from "../generated/constants.ts";
 
 import type { BufferWithArrays } from "../plugins/types.ts";
 import type { ParserOptions as ParseOptions } from "../bindings.js";
@@ -13,7 +19,7 @@ import type { ParserOptions as ParseOptions } from "../bindings.js";
 export type { ParseOptions };
 
 // Size array buffer for raw transfer
-const ARRAY_BUFFER_SIZE = BUFFER_SIZE + BUFFER_ALIGN;
+const ARRAY_BUFFER_SIZE = BLOCK_SIZE + BLOCK_ALIGN;
 
 // 1 GiB
 const ONE_GIB = 1 << 30;
@@ -21,8 +27,10 @@ const ONE_GIB = 1 << 30;
 // Text encoder for encoding source text into buffer
 const textEncoder = new TextEncoder();
 
-// Buffer for raw transfer
+// Buffers for raw transfer.
+// Both are views of the same memory, but `blockBuffer` is slightly larger, and is what we pass to Rust.
 let buffer: BufferWithArrays | null = null;
+let blockBuffer: Uint8Array | null = null;
 
 // Whether raw transfer is supported
 let rawTransferIsSupported: boolean | null = null;
@@ -45,21 +53,34 @@ export function parse(path: string, sourceText: string, options?: ParseOptions) 
   // Initialize buffer, if not already
   if (buffer === null) initBuffer();
   debugAssertIsNonNull(buffer);
+  debugAssertIsNonNull(blockBuffer);
 
-  // Write source into start of buffer.
-  // `TextEncoder` cannot write into a `Uint8Array` larger than 1 GiB,
-  // so create a view into buffer of this size to write into.
-  const sourceBuffer = new Uint8Array(buffer.buffer, buffer.byteOffset, ONE_GIB);
+  // Write source into end of buffer.
+  // Maximum size of a string encoded in UTF-8 is 3 x the length of the string in UTF-16 characters
+  // (a source which consists entirely of 3-byte UTF-8 characters).
+  // We can't predict how many bytes will be needed exactly in advance of encoding, so we reserve
+  // the maximum theoretically possible number of bytes required.
+  // `TextEncoder` cannot write into a `Uint8Array` larger than 1 GiB, so size is capped at 1 GiB.
+  const maxSourceByteLen = sourceText.length * 3;
+  if (maxSourceByteLen > ONE_GIB) throw new Error("Source text is too long");
+  const sourceStartPos = ACTIVE_SIZE - maxSourceByteLen;
+
+  const sourceBuffer = new Uint8Array(
+    buffer.buffer,
+    buffer.byteOffset + sourceStartPos,
+    maxSourceByteLen,
+  );
   const { read, written: sourceByteLen } = textEncoder.encodeInto(sourceText, sourceBuffer);
   if (read !== sourceText.length) throw new Error("Failed to write source text into buffer");
+  debugAssert(sourceByteLen <= maxSourceByteLen);
 
   // Parse into buffer
-  parseRawSync(path, buffer, sourceByteLen, options);
+  parseRawSync(path, blockBuffer, sourceStartPos, sourceByteLen, options);
 
   // Check parsing succeeded.
   // 0 is used as sentinel value to indicate parsing failed.
   // TODO: Get parsing error details from Rust to display nicely.
-  const programOffset = buffer.uint32[DATA_POINTER_POS_32];
+  const programOffset = buffer.int32[DATA_POINTER_POS_32];
   if (programOffset === 0) throw new Error("Parsing failed");
 }
 
@@ -74,6 +95,12 @@ export function parse(path: string, sourceText: string, options?: ParseOptions) 
  * It's always possible to obtain a 2 GiB slice aligned on 4 GiB within a 6 GiB buffer,
  * no matter how the 6 GiB buffer is aligned.
  *
+ * `buffer` itself, and `int32` and `float64` views of `buffer`, are `BUFFER_SIZE` bytes,
+ * which excludes `FixedSizeAllocatorMetadata` and `ChunkFooter`.
+ * This ensures this critical data cannot be accidentally overwritten on JS side.
+ * `blockBuffer` is `BLOCK_SIZE` bytes, which includes `FixedSizeAllocatorMetadata` and `ChunkFooter`.
+ * `blockBuffer` is what we pass to Rust, which needs to write them.
+ *
  * Note: On systems with virtual memory, this only consumes 6 GiB of *virtual* memory.
  * It does not consume physical memory until data is actually written to the `Uint8Array`.
  * Physical memory consumed corresponds to the quantity of data actually written.
@@ -83,8 +110,10 @@ export function initBuffer() {
   const arrayBuffer = new ArrayBuffer(ARRAY_BUFFER_SIZE);
   const offset = getBufferOffset(new Uint8Array(arrayBuffer));
   buffer = new Uint8Array(arrayBuffer, offset, BUFFER_SIZE) as BufferWithArrays;
-  buffer.uint32 = new Uint32Array(arrayBuffer, offset, BUFFER_SIZE / 4);
+  buffer.int32 = new Int32Array(arrayBuffer, offset, BUFFER_SIZE / 4);
   buffer.float64 = new Float64Array(arrayBuffer, offset, BUFFER_SIZE / 8);
+
+  blockBuffer = new Uint8Array(arrayBuffer, offset, BLOCK_SIZE);
 
   // Store in `buffers`, at index 0
   debugAssert(buffers.length === 0, "`buffers` array should be empty");

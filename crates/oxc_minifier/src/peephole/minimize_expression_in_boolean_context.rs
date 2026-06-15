@@ -3,7 +3,7 @@ use oxc_ast::ast::*;
 use oxc_ecmascript::constant_evaluation::{ConstantEvaluation, IsInt32OrUint32};
 use oxc_span::GetSpan;
 
-use crate::ctx::Ctx;
+use crate::TraverseCtx;
 
 use super::PeepholeOptimizations;
 
@@ -13,7 +13,7 @@ impl<'a> PeepholeOptimizations {
     /// `SimplifyBooleanExpr`: <https://github.com/evanw/esbuild/blob/v0.24.2/internal/js_ast/js_ast_helpers.go#L2059>
     pub fn minimize_expression_in_boolean_context(
         expr: &mut Expression<'a>,
-        ctx: &mut Ctx<'a, '_>,
+        ctx: &mut TraverseCtx<'a>,
     ) {
         match expr {
             // "!!a" => "a"
@@ -29,7 +29,7 @@ impl<'a> PeepholeOptimizations {
             }
             Expression::BinaryExpression(e)
                 if e.operator.is_equality()
-                    && matches!(&e.right, Expression::NumericLiteral(lit) if lit.value == 0.0)
+                    && e.right.is_number_0()
                     && e.left.is_int32_or_uint32(ctx) =>
             {
                 let argument = e.left.take_in(ctx.ast);

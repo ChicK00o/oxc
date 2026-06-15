@@ -1,10 +1,11 @@
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
 
+use crate::source_text::SourceTextExt as _;
 use crate::{
     ast_nodes::{AstNode, AstNodes},
     formatter::{
-        Buffer, Format, Formatter,
+        Buffer, Format, JsFormatContext, JsFormatter, JsFormatterExt as _,
         prelude::{format_with, group, soft_block_indent_with_maybe_space},
         trivia::format_dangling_comments,
     },
@@ -27,24 +28,24 @@ impl<'a> ObjectLike<'a, '_> {
         }
     }
 
-    fn should_hug(&self, f: &Formatter<'_, 'a>) -> bool {
+    fn should_hug(&self, f: &JsFormatter<'_, 'a>) -> bool {
         // Check if the object type is the type annotation of the only parameter in a function.
         // This prevents breaking object properties in cases like:
         // const fn = ({ foo }: { foo: string }) => { ... };
         matches!(self, Self::TSTypeLiteral(node) if {
             // Check if parent is TSTypeAnnotation
-            matches!(node.parent, AstNodes::TSTypeAnnotation(type_ann) if {
-                match &type_ann.parent {
+            matches!(node.parent(), AstNodes::TSTypeAnnotation(type_ann) if {
+                match &type_ann.parent() {
                     AstNodes::FormalParameter(param) if param.initializer.is_none() => {
-                        let AstNodes::FormalParameters(parameters) = &param.parent else {
+                        let AstNodes::FormalParameters(parameters) = &param.parent() else {
                             unreachable!()
                         };
-                        let this_param = get_this_param(parameters.parent);
+                        let this_param = get_this_param(parameters.parent());
                         should_hug_function_parameters(parameters, this_param, false, f)
 
                     }
                     AstNodes::TSThisParameter(param) => {
-                        matches!(param.parent, AstNodes::Function(func) if {
+                        matches!(param.parent(), AstNodes::Function(func) if {
                             should_hug_function_parameters(func.params(), Some(param), false, f)
                         })
                     },
@@ -54,7 +55,7 @@ impl<'a> ObjectLike<'a, '_> {
         })
     }
 
-    fn members_have_leading_newline(&self, f: &Formatter<'_, 'a>) -> bool {
+    fn members_have_leading_newline(&self, f: &JsFormatter<'_, 'a>) -> bool {
         match self {
             Self::ObjectExpression(o) => o.as_ref().properties.first().is_some_and(|p| {
                 f.source_text().contains_newline_between(o.span.start, p.span().start)
@@ -78,13 +79,13 @@ impl<'a> ObjectLike<'a, '_> {
     fn is_inside_jsx_spread(&self) -> bool {
         match self {
             Self::ObjectExpression(o) => {
-                matches!(o.parent, AstNodes::JSXSpreadAttribute(_) | AstNodes::JSXSpreadChild(_))
+                matches!(o.parent(), AstNodes::JSXSpreadAttribute(_) | AstNodes::JSXSpreadChild(_))
             }
             Self::TSTypeLiteral(_) => false,
         }
     }
 
-    fn write_members(&self, f: &mut Formatter<'_, 'a>) {
+    fn write_members(&self, f: &mut JsFormatter<'_, 'a>) {
         match self {
             Self::ObjectExpression(o) => o.properties().fmt(f),
             Self::TSTypeLiteral(o) => o.members().fmt(f),
@@ -92,8 +93,8 @@ impl<'a> ObjectLike<'a, '_> {
     }
 }
 
-impl<'a> Format<'a> for ObjectLike<'a, '_> {
-    fn fmt(&self, f: &mut Formatter<'_, 'a>) {
+impl<'a> Format<'a, JsFormatContext<'a>> for ObjectLike<'a, '_> {
+    fn fmt(&self, f: &mut JsFormatter<'_, 'a>) {
         let members = format_with(|f| self.write_members(f));
 
         write!(f, "{");

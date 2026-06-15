@@ -3,16 +3,14 @@ use oxc_ast::ast::*;
 use oxc_syntax::operator::AssignmentOperator;
 
 use crate::{
-    Context, ParserImpl,
-    context::ParsingContext,
-    diagnostics,
+    Context, ParserConfig as Config, ParserImpl, diagnostics,
     lexer::Kind,
-    modifiers::{ModifierFlags, Modifiers},
+    modifiers::{ModifierKind, ModifierKinds, Modifiers},
 };
 
 use super::FunctionKind;
 
-impl<'a> ParserImpl<'a> {
+impl<'a, C: Config> ParserImpl<'a, C> {
     /// [Object Expression](https://tc39.es/ecma262/#sec-object-initializer)
     /// `ObjectLiteral`[Yield, Await] :
     ///     { }
@@ -22,84 +20,17 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
-
-        if self.options.recover_from_errors {
-            self.context_stack.push(ParsingContext::ObjectLiteralMembers);
+        let (object_expression_properties, comma_span) = self.context_add(Context::In, |p| {
+            p.parse_delimited_list(
+                Kind::RCurly,
+                Kind::Comma,
+                opening_span,
+                Self::parse_object_expression_property,
+            )
+        });
+        if let Some(comma_span) = comma_span {
+            self.state.trailing_commas.insert(span, self.end_span(comma_span));
         }
-
-        // Custom loop with error recovery for object properties
-        let mut object_expression_properties = self.ast.vec();
-        let mut comma_span = None;
-
-        self.ctx = self.ctx.and_in(true);
-
-        let kind = self.cur_kind();
-        if kind != Kind::RCurly
-            && !matches!(kind, Kind::Eof | Kind::Undetermined)
-            && self.fatal_error.is_none()
-        {
-            object_expression_properties.push(self.parse_object_expression_property());
-
-            loop {
-                let kind = self.cur_kind();
-
-                // Check termination conditions
-                if kind == Kind::RCurly
-                    || matches!(kind, Kind::Eof | Kind::Undetermined)
-                    || self.fatal_error.is_some()
-                {
-                    break;
-                }
-
-                // Expect comma separator
-                if kind != Kind::Comma {
-                    let error = diagnostics::expect_closing_or_separator(
-                        Kind::RCurly.to_str(),
-                        Kind::Comma.to_str(),
-                        kind.to_str(),
-                        self.cur_token().span(),
-                        opening_span,
-                    );
-
-                    // Error recovery: decide whether to skip or abort
-                    if self.options.recover_from_errors {
-                        self.error(error);
-                        let decision = self.synchronize_on_error(
-                            crate::context::ParsingContext::ObjectLiteralMembers,
-                        );
-                        match decision {
-                            crate::synchronization::RecoveryDecision::Skip => continue,
-                            crate::synchronization::RecoveryDecision::Abort => break,
-                        }
-                    } else {
-                        // M6.5.6: Non-recovery mode - fatal error
-                        self.set_fatal_error(error);
-                        break;
-                    }
-                }
-
-                self.bump(Kind::Comma);
-
-                // Check for trailing comma
-                if self.cur_kind() == Kind::RCurly {
-                    comma_span = Some(self.prev_token_end - 1);
-                    break;
-                }
-
-                object_expression_properties.push(self.parse_object_expression_property());
-            }
-        }
-
-        self.ctx = self.ctx.and_in(false);
-
-        if self.options.recover_from_errors {
-            self.context_stack.pop();
-        }
-
-        if let Some(comma_span_val) = comma_span {
-            self.state.trailing_commas.insert(span, self.end_span(comma_span_val));
-        }
-
         self.expect(Kind::RCurly);
         self.ast.alloc_object_expression(self.end_span(span), object_expression_properties)
     }
@@ -136,7 +67,7 @@ impl<'a> ParserImpl<'a> {
         if asterisk_token || matches!(self.cur_kind(), Kind::LParen | Kind::LAngle) {
             self.verify_modifiers(
                 &modifiers,
-                ModifierFlags::ASYNC,
+                ModifierKinds::new([ModifierKind::Async]),
                 true,
                 diagnostics::modifier_cannot_be_used_here,
             );
@@ -158,7 +89,7 @@ impl<'a> ParserImpl<'a> {
 
         self.verify_modifiers(
             &modifiers,
-            ModifierFlags::empty(),
+            ModifierKinds::none(),
             true,
             diagnostics::modifier_cannot_be_used_here,
         );
@@ -167,14 +98,12 @@ impl<'a> ParserImpl<'a> {
 
         if is_shorthand_property_assignment {
             if let PropertyKey::StaticIdentifier(identifier_name) = key {
-                let identifier_reference =
-                    self.ast.identifier_reference(identifier_name.span, identifier_name.name);
-                let value = Expression::Identifier(self.alloc(identifier_reference.clone()));
                 // CoverInitializedName ({ foo = bar })
                 if self.eat(Kind::Eq) {
                     let right = self.parse_assignment_expression_or_higher();
                     let left = AssignmentTarget::AssignmentTargetIdentifier(
-                        self.alloc(identifier_reference),
+                        self.ast
+                            .alloc_identifier_reference(identifier_name.span, identifier_name.name),
                     );
                     let expr = self.ast.assignment_expression(
                         self.end_span(span),
@@ -184,6 +113,9 @@ impl<'a> ParserImpl<'a> {
                     );
                     self.state.cover_initialized_name.insert(span, expr);
                 }
+                let value = Expression::Identifier(
+                    self.ast.alloc_identifier_reference(identifier_name.span, identifier_name.name),
+                );
                 self.ast.alloc_object_property(
                     self.end_span(span),
                     PropertyKind::Init,
@@ -245,8 +177,12 @@ impl<'a> ParserImpl<'a> {
                 PropertyKey::from(self.parse_computed_property_name())
             }
             Kind::PrivateIdentifier => {
-                let ident = self.parse_private_identifier();
-                PropertyKey::PrivateIdentifier(self.alloc(ident))
+                let private_ident = self.parse_private_identifier();
+                self.error(diagnostics::private_identifier_in_property_name(
+                    &private_ident.name,
+                    private_ident.span,
+                ));
+                PropertyKey::PrivateIdentifier(self.alloc(private_ident))
             }
             _ => {
                 let ident = self.parse_identifier_name();
@@ -273,7 +209,7 @@ impl<'a> ParserImpl<'a> {
         &mut self,
         span: u32,
         kind: PropertyKind,
-        modifiers: &Modifiers<'a>,
+        modifiers: &Modifiers,
     ) -> Box<'a, ObjectProperty<'a>> {
         let (key, computed) = self.parse_property_name();
         let function = self.parse_method(false, false, FunctionKind::ObjectMethod);
@@ -284,7 +220,7 @@ impl<'a> ParserImpl<'a> {
         }
         self.verify_modifiers(
             modifiers,
-            ModifierFlags::empty(),
+            ModifierKinds::none(),
             true,
             diagnostics::modifier_cannot_be_used_here,
         );

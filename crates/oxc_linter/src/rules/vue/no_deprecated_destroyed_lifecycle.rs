@@ -62,7 +62,9 @@ declare_oxc_lint!(
     NoDeprecatedDestroyedLifecycle,
     vue,
     correctness,
-    fix
+    fix,
+    version = "1.35.0",
+    short_description = "Disallow using deprecated `destroyed` and `beforeDestroy` lifecycle hooks in Vue.js 3.0.0+.",
 );
 
 impl Rule for NoDeprecatedDestroyedLifecycle {
@@ -206,89 +208,89 @@ fn test() {
     let pass = vec![
         (
             "
-			      <script>
-			      export default {
-			        unmounted () {},
-			        beforeUnmount () {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    unmounted () {},
+                    beforeUnmount () {},
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        unmounted,
-			        beforeUnmount,
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    unmounted,
+                    beforeUnmount,
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        beforeCreate,
-			        created,
-			        beforeMount,
-			        mounted,
-			        beforeUpdate,
-			        updated,
-			        activated,
-			        deactivated,
-			        beforeUnmount,
-			        unmounted,
-			        errorCaptured,
-			        renderTracked,
-			        renderTriggered,
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeCreate,
+                    created,
+                    beforeMount,
+                    mounted,
+                    beforeUpdate,
+                    updated,
+                    activated,
+                    deactivated,
+                    beforeUnmount,
+                    unmounted,
+                    errorCaptured,
+                    renderTracked,
+                    renderTriggered,
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        beforeUnmount:beforeDestroy,
-			        unmounted:destroyed,
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeUnmount:beforeDestroy,
+                    unmounted:destroyed,
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        ...beforeDestroy,
-			        ...destroyed,
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    ...beforeDestroy,
+                    ...destroyed,
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        [beforeDestroy] () {},
-			        [destroyed] () {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    [beforeDestroy] () {},
+                    [destroyed] () {},
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
@@ -298,74 +300,74 @@ fn test() {
     let fail = vec![
         (
             "
-			      <script>
-			      export default {
-			        beforeDestroy () {},
-			        destroyed () {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeDestroy () {},
+                    destroyed () {},
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        beforeDestroy,
-			        destroyed,
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeDestroy,
+                    destroyed,
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        beforeCreate,
-			        created,
-			        beforeMount,
-			        mounted,
-			        beforeUpdate,
-			        updated,
-			        activated,
-			        deactivated,
-			        beforeDestroy,
-			        destroyed,
-			        errorCaptured,
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeCreate,
+                    created,
+                    beforeMount,
+                    mounted,
+                    beforeUpdate,
+                    updated,
+                    activated,
+                    deactivated,
+                    beforeDestroy,
+                    destroyed,
+                    errorCaptured,
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        ['beforeDestroy']() {},
-			        ['destroyed']() {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    ['beforeDestroy']() {},
+                    ['destroyed']() {},
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        [`beforeDestroy`]() {},
-			        [`destroyed`]() {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    [`beforeDestroy`]() {},
+                    [`destroyed`]() {},
+                  }
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
@@ -375,119 +377,119 @@ fn test() {
     let fix = vec![
         (
             "
-			      <script>
-			      export default {
-			        beforeDestroy () {},
-			        destroyed () {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeDestroy () {},
+                    destroyed () {},
+                  }
+                  </script>
+                  ",
             "
-			      <script>
-			      export default {
-			        beforeUnmount () {},
-			        unmounted () {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeUnmount () {},
+                    unmounted () {},
+                  }
+                  </script>
+                  ",
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        beforeDestroy,
-			        destroyed,
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeDestroy,
+                    destroyed,
+                  }
+                  </script>
+                  ",
             "
-			      <script>
-			      export default {
-			        beforeUnmount:beforeDestroy,
-			        unmounted:destroyed,
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeUnmount:beforeDestroy,
+                    unmounted:destroyed,
+                  }
+                  </script>
+                  ",
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        beforeCreate,
-			        created,
-			        beforeMount,
-			        mounted,
-			        beforeUpdate,
-			        updated,
-			        activated,
-			        deactivated,
-			        beforeDestroy,
-			        destroyed,
-			        errorCaptured,
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeCreate,
+                    created,
+                    beforeMount,
+                    mounted,
+                    beforeUpdate,
+                    updated,
+                    activated,
+                    deactivated,
+                    beforeDestroy,
+                    destroyed,
+                    errorCaptured,
+                  }
+                  </script>
+                  ",
             "
-			      <script>
-			      export default {
-			        beforeCreate,
-			        created,
-			        beforeMount,
-			        mounted,
-			        beforeUpdate,
-			        updated,
-			        activated,
-			        deactivated,
-			        beforeUnmount:beforeDestroy,
-			        unmounted:destroyed,
-			        errorCaptured,
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    beforeCreate,
+                    created,
+                    beforeMount,
+                    mounted,
+                    beforeUpdate,
+                    updated,
+                    activated,
+                    deactivated,
+                    beforeUnmount:beforeDestroy,
+                    unmounted:destroyed,
+                    errorCaptured,
+                  }
+                  </script>
+                  ",
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        ['beforeDestroy']() {},
-			        ['destroyed']() {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    ['beforeDestroy']() {},
+                    ['destroyed']() {},
+                  }
+                  </script>
+                  ",
             "
-			      <script>
-			      export default {
-			        ['beforeUnmount']() {},
-			        ['unmounted']() {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    ['beforeUnmount']() {},
+                    ['unmounted']() {},
+                  }
+                  </script>
+                  ",
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script>
-			      export default {
-			        [`beforeDestroy`]() {},
-			        [`destroyed`]() {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    [`beforeDestroy`]() {},
+                    [`destroyed`]() {},
+                  }
+                  </script>
+                  ",
             "
-			      <script>
-			      export default {
-			        [`beforeUnmount`]() {},
-			        [`unmounted`]() {},
-			      }
-			      </script>
-			      ",
+                  <script>
+                  export default {
+                    [`beforeUnmount`]() {},
+                    [`unmounted`]() {},
+                  }
+                  </script>
+                  ",
             None,
             Some(PathBuf::from("test.vue")),
         ),

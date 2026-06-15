@@ -51,11 +51,11 @@ impl Deref for PreferStructuredClone {
 declare_oxc_lint!(
     /// ### What it does
     ///
-    /// Prefer using structuredClone to create a deep clone.
+    /// Prefer using `structuredClone` to create a deep clone.
     ///
     /// ### Why is this bad?
     ///
-    /// structuredClone is the modern way to create a deep clone of a value.
+    /// `structuredClone` is the modern way to create a deep clone of a value.
     ///
     /// ### Examples
     ///
@@ -75,6 +75,8 @@ declare_oxc_lint!(
     style,
     suggestion,
     config = PreferStructuredCloneConfig,
+    version = "0.9.0",
+    short_description = "Prefer using `structuredClone` to create a deep clone.",
 );
 
 impl Rule for PreferStructuredClone {

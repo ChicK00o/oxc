@@ -268,6 +268,8 @@ TextEdit: TextEdit {
 }
 
 
+########### Fix All Action
+None
 ########## 
 Linted file: fixtures/lsp/frameworks/vue/debugger.vue
 ----------
@@ -405,6 +407,8 @@ TextEdit: TextEdit {
 }
 
 
+########### Fix All Action
+None
 ########## 
 Linted file: fixtures/lsp/frameworks/svelte/debugger.svelte
 ----------
@@ -501,7 +505,7 @@ TextEdit: TextEdit {
 
 CodeAction: 
 Title: Disable no-unassigned-vars for this line
-Is Preferred: Some(true)
+Is Preferred: Some(false)
 TextEdit: TextEdit {
     range: Range {
         start: Position {
@@ -537,7 +541,7 @@ TextEdit: TextEdit {
 
 CodeAction: 
 Title: Disable no-unassigned-vars for this line
-Is Preferred: Some(true)
+Is Preferred: Some(false)
 TextEdit: TextEdit {
     range: Range {
         start: Position {
@@ -571,6 +575,8 @@ TextEdit: TextEdit {
 }
 
 
+########### Fix All Action
+None
 ########## 
 Linted file: fixtures/lsp/frameworks/nextjs/[[..rest]]/debugger.ts
 ----------
@@ -641,3 +647,7 @@ TextEdit: TextEdit {
     },
     new_text: "// oxlint-disable no-debugger\n",
 }
+
+
+########### Fix All Action
+None

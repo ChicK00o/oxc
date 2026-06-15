@@ -26,7 +26,7 @@ fn prefer_array_destructuring(span: Span) -> OxcDiagnostic {
 }
 
 #[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 struct Config {
     array: bool,
     object: bool,
@@ -39,7 +39,7 @@ impl Default for Config {
 }
 
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct PreferDestructuring {
     /// Configuration for destructuring in variable declarations, configured for arrays and objects independently.
     #[serde(rename = "VariableDeclarator")]
@@ -54,7 +54,7 @@ pub struct PreferDestructuring {
 declare_oxc_lint!(
     /// ### What it does
     ///
-    /// Require destructuring from arrays and/or objects
+    /// Require destructuring from arrays and/or objects.
     ///
     /// ### Why is this bad?
     ///
@@ -90,6 +90,8 @@ declare_oxc_lint!(
     style,
     conditional_fix,
     config = PreferDestructuring,
+    version = "1.10.0",
+    short_description = "Require destructuring from arrays and/or objects.",
 );
 
 impl Rule for PreferDestructuring {
@@ -181,27 +183,25 @@ impl Rule for PreferDestructuring {
                         }
                     }
                     MemberExpression::StaticMemberExpression(static_expr)
-                        if self.assignment_expression.object =>
+                        if self.assignment_expression.object
+                            && get_target_name(&assign_expr.left)
+                                .is_some_and(|name| name == static_expr.property.name.as_str()) =>
                     {
-                        if get_target_name(&assign_expr.left)
-                            .is_some_and(|name| name == static_expr.property.name.as_str())
-                        {
-                            // Safe autofix for assignments: foo = object.foo; -> ({ foo } = object);
-                            ctx.diagnostic_with_fix(
-                                prefer_object_destructuring(assign_expr.span),
-                                |fixer| {
-                                    generate_fix(
-                                        &fixer,
-                                        static_expr.property.span,
-                                        get_object_span_without_redundant_parentheses(
-                                            &static_expr.object,
-                                        ),
-                                        assign_expr.span,
-                                        true,
-                                    )
-                                },
-                            );
-                        }
+                        // Safe autofix for assignments: foo = object.foo; -> ({ foo } = object);
+                        ctx.diagnostic_with_fix(
+                            prefer_object_destructuring(assign_expr.span),
+                            |fixer| {
+                                generate_fix(
+                                    &fixer,
+                                    static_expr.property.span,
+                                    get_object_span_without_redundant_parentheses(
+                                        &static_expr.object,
+                                    ),
+                                    assign_expr.span,
+                                    true,
+                                )
+                            },
+                        );
                     }
                     _ => {}
                 }
@@ -629,13 +629,13 @@ fn test() {
         ("var foo /* comment */ = object.foo, a;", None),
         (
             "var foo // comment
-			 = object.foo;",
+             = object.foo;",
             None,
         ),
         ("var foo = /* comment */ object.foo;", None),
         (
             "var foo = // comment
-			 object.foo;",
+             object.foo;",
             None,
         ),
         ("var foo = (/* comment */ object).foo;", None),
@@ -644,18 +644,18 @@ fn test() {
         ("var foo = bar/* comment */.baz.foo;", None),
         (
             "var foo = bar[// comment
-			baz].foo;",
+            baz].foo;",
             None,
         ),
         (
             "var foo // comment
-			 = bar(/* comment */).foo;",
+             = bar(/* comment */).foo;",
             None,
         ),
         ("var foo = bar/* comment */.baz/* comment */.foo;", None),
         (
             "var foo = object// comment
-			.foo;",
+            .foo;",
             None,
         ),
         ("var foo = object./* comment */foo;", None),
@@ -666,7 +666,7 @@ fn test() {
         ("var foo = object.foo/* comment */, a;", None),
         (
             "var foo = object.foo// comment
-			, a;",
+            , a;",
             None,
         ),
         ("var foo = object.foo, /* comment */ a;", None),
@@ -691,9 +691,9 @@ fn test() {
         ("var foo = bar/* comment */.baz.foo;", "var {foo} = bar/* comment */.baz;", None),
         (
             "var foo = bar[// comment
-        		baz].foo;",
+                baz].foo;",
             "var {foo} = bar[// comment
-        		baz];",
+                baz];",
             None,
         ),
         ("var foo = (bar[baz]).foo;", "var {foo} = bar[baz];", None),
@@ -702,9 +702,9 @@ fn test() {
         ("var foo = object.foo/* comment */, a;", "var {foo} = object/* comment */, a;", None),
         (
             "var foo = object.foo// comment
-        		, a;",
+                , a;",
             "var {foo} = object// comment
-        		, a;",
+                , a;",
             None,
         ),
         ("var foo = object.foo, /* comment */ a;", "var {foo} = object, /* comment */ a;", None),

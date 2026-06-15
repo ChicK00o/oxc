@@ -11,7 +11,7 @@
 //! The parser has a minimal API with three inputs (a [memory arena](oxc_allocator::Allocator), a
 //! source string, and a [`SourceType`]) and one return struct (a [ParserReturn]).
 //!
-//! ```rust
+//! ```rust,ignore
 //! let parser_return = Parser::new(&allocator, &source_text, source_type).parse();
 //! ```
 //!
@@ -36,12 +36,12 @@
 //!
 //! <https://github.com/oxc-project/oxc/blob/main/crates/oxc_parser/examples/parser.rs>
 //!
-//! ```rust
+//! ```rust,ignore
 #![doc = include_str!("../examples/parser.rs")]
 //! ```
 //!
 //! ### Parsing TSX
-//! ```rust
+//! ```rust,ignore
 #![doc = include_str!("../examples/parser_tsx.rs")]
 //! ```
 //!
@@ -54,7 +54,7 @@
 //! For ad-hoc tasks, the semantic analyzer can be used to get a parent pointing tree with untyped nodes,
 //! the nodes can be iterated through a sequential loop.
 //!
-//! ```rust
+//! ```rust,ignore
 //! for node in semantic.nodes().iter() {
 //!     match node.kind() {
 //!         // check node
@@ -64,15 +64,15 @@
 //!
 //! See [full linter example](https://github.com/Boshen/oxc/blob/ab2ef4f89ba3ca50c68abb2ca43e36b7793f3673/crates/oxc_linter/examples/linter.rs#L38-L39)
 
-#![warn(missing_docs)]
+use std::any::Any;
 
+pub mod config;
 mod context;
 mod cursor;
 mod error_handler;
 mod modifiers;
 mod module_record;
 mod state;
-mod synchronization;
 
 mod js;
 mod jsx;
@@ -87,19 +87,23 @@ mod lexer;
 #[doc(hidden)]
 pub mod lexer;
 
-use oxc_allocator::{Allocator, Box as ArenaBox, Dummy};
+use oxc_allocator::{Allocator, Box as ArenaBox, Dummy, Vec as ArenaVec};
 use oxc_ast::{
     AstBuilder,
     ast::{Expression, Program},
 };
-use oxc_diagnostics::OxcDiagnostic;
+use oxc_diagnostics::{Diagnostics, OxcDiagnostic};
 use oxc_span::{SourceType, Span};
 use oxc_syntax::module_record::ModuleRecord;
 
+pub use crate::lexer::{Kind, Token};
 use crate::{
-    context::{Context, ParsingContextStack, StatementContext},
+    config::{
+        LexerConfig, NoTokensParserConfig, ParserConfig, RuntimeParserConfig, TokensParserConfig,
+    },
+    context::{Context, StatementContext},
     error_handler::FatalError,
-    lexer::{Lexer, Token},
+    lexer::Lexer,
     module_record::ModuleRecordBuilder,
     state::ParserState,
 };
@@ -124,14 +128,14 @@ pub(crate) const MAX_LEN: usize = if size_of::<usize>() >= 8 {
 ///
 /// [`program`] will always contain a structurally valid AST, even if there are syntax errors.
 /// However, the AST may be semantically invalid. To ensure a valid AST,
-/// 1. Check that [`errors`] is empty
+/// 1. Check that [`diagnostics`] is empty
 /// 2. Run semantic analysis with [syntax error checking
 ///    enabled](https://docs.rs/oxc_semantic/latest/oxc_semantic/struct.SemanticBuilder.html#method.with_check_syntax_error)
 ///
 /// ## Errors
 /// Oxc's [`Parser`] is able to recover from some syntax errors and continue parsing. When this
 /// happens,
-/// 1. [`errors`] will be non-empty
+/// 1. [`diagnostics`] will be non-empty
 /// 2. [`program`] will contain a full AST
 /// 3. [`panicked`] will be false
 ///
@@ -139,7 +143,7 @@ pub(crate) const MAX_LEN: usize = if size_of::<usize>() >= 8 {
 /// be empty and [`panicked`] will be `true`.
 ///
 /// [`program`]: ParserReturn::program
-/// [`errors`]: ParserReturn::errors
+/// [`diagnostics`]: ParserReturn::diagnostics
 /// [`panicked`]: ParserReturn::panicked
 #[non_exhaustive]
 pub struct ParserReturn<'a> {
@@ -152,7 +156,7 @@ pub struct ParserReturn<'a> {
     /// 1. The [`Parser`] encounters a recoverable syntax error
     /// 2. The logic for checking the violation is in the semantic analyzer
     ///
-    /// To ensure a valid AST, check that [`errors`](ParserReturn::errors) is empty. Then, run
+    /// To ensure a valid AST, check that [`diagnostics`](ParserReturn::diagnostics) is empty. Then, run
     /// semantic analysis with syntax error checking enabled.
     pub program: Program<'a>,
 
@@ -164,19 +168,24 @@ pub struct ParserReturn<'a> {
     /// This list is not comprehensive. Oxc offloads more-expensive checks to [semantic
     /// analysis](https://docs.rs/oxc_semantic), which can be enabled using
     /// [`SemanticBuilder::with_check_syntax_error`](https://docs.rs/oxc_semantic/latest/oxc_semantic/struct.SemanticBuilder.html#method.with_check_syntax_error).
-    pub errors: Vec<OxcDiagnostic>,
+    pub diagnostics: Diagnostics,
 
     /// Irregular whitespaces for `Oxlint`
     pub irregular_whitespaces: Box<[Span]>,
 
+    /// Lexed tokens in source order.
+    ///
+    /// Tokens are only collected when tokens are enabled in [`ParserConfig`].
+    pub tokens: oxc_allocator::Vec<'a, Token>,
+
     /// Whether the parser panicked and terminated early.
     ///
     /// This will be `false` if parsing was successful, or if parsing was able to recover from a
-    /// syntax error. When `true`, [`program`] will be empty and [`errors`] will contain at least
+    /// syntax error. When `true`, [`program`] will be empty and [`diagnostics`] will contain at least
     /// one error.
     ///
     /// [`program`]: ParserReturn::program
-    /// [`errors`]: ParserReturn::errors
+    /// [`diagnostics`]: ParserReturn::diagnostics
     pub panicked: bool,
 
     /// Whether the file is [flow](https://flow.org).
@@ -222,15 +231,6 @@ pub struct ParseOptions {
     ///
     /// [`V8IntrinsicExpression`]: oxc_ast::ast::V8IntrinsicExpression
     pub allow_v8_intrinsics: bool,
-
-    /// Enable error recovery for invalid assignment targets.
-    ///
-    /// When `true`, the parser recovers from invalid assignment target errors
-    /// and continues parsing to report all errors (useful for type-checking).
-    /// When `false`, the parser terminates on these errors (faster for transpilation).
-    ///
-    /// Default: `false`
-    pub recover_from_errors: bool,
 }
 
 impl Default for ParseOptions {
@@ -241,7 +241,6 @@ impl Default for ParseOptions {
             allow_return_outside_function: false,
             preserve_parens: true,
             allow_v8_intrinsics: false,
-            recover_from_errors: false,
         }
     }
 }
@@ -249,11 +248,12 @@ impl Default for ParseOptions {
 /// Recursive Descent Parser for ECMAScript and TypeScript
 ///
 /// See [`Parser::parse`] for entry function.
-pub struct Parser<'a> {
+pub struct Parser<'a, C: ParserConfig = NoTokensParserConfig> {
     allocator: &'a Allocator,
     source_text: &'a str,
     source_type: SourceType,
     options: ParseOptions,
+    config: C,
 }
 
 impl<'a> Parser<'a> {
@@ -265,14 +265,30 @@ impl<'a> Parser<'a> {
     /// - `source_type`: Source type (e.g. JavaScript, TypeScript, JSX, ESM Module, Script)
     pub fn new(allocator: &'a Allocator, source_text: &'a str, source_type: SourceType) -> Self {
         let options = ParseOptions::default();
-        Self { allocator, source_text, source_type, options }
+        Self { allocator, source_text, source_type, options, config: NoTokensParserConfig }
     }
+}
 
+impl<'a, C: ParserConfig> Parser<'a, C> {
     /// Set parse options
     #[must_use]
     pub fn with_options(mut self, options: ParseOptions) -> Self {
         self.options = options;
         self
+    }
+
+    /// Set parser config.
+    ///
+    /// See [`ParserConfig`] for more details.
+    #[must_use]
+    pub fn with_config<Config: ParserConfig>(self, config: Config) -> Parser<'a, Config> {
+        Parser {
+            allocator: self.allocator,
+            source_text: self.source_text,
+            source_type: self.source_type,
+            options: self.options,
+            config,
+        }
     }
 }
 
@@ -310,23 +326,60 @@ mod parser_parse {
         }
     }
 
-    impl<'a> Parser<'a> {
+    impl<'a, C: ParserConfig> Parser<'a, C> {
         /// Main entry point
         ///
         /// Returns an empty `Program` on unrecoverable error,
         /// Recoverable errors are stored inside `errors`.
         ///
         /// See the [module-level documentation](crate) for examples and more information.
+        //
+        // # Implementation note
+        //
+        // Dispatches via `Any` to a non-generic helper for each known `ParserConfig`.
+        // The dispatch keeps the parser body emitted exactly once in `oxc_parser`'s rlib,
+        // so consuming crates don't each get a private copy. The `Any::is` / `downcast_ref`
+        // calls const-fold when `C` is concrete (the trait object is built from a known
+        // concrete type at every monomorphization site, so LLVM devirtualises the vtable
+        // call to `Any::type_id` and folds the comparison), leaving each monomorphization
+        // as a single call into the matching helper.
         pub fn parse(self) -> ParserReturn<'a> {
-            let unique = UniquePromise::new();
-            let parser = ParserImpl::new(
-                self.allocator,
-                self.source_text,
-                self.source_type,
-                self.options,
-                unique,
-            );
-            parser.parse()
+            let config: &dyn Any = &self.config;
+            if config.is::<NoTokensParserConfig>() {
+                parse_with_no_tokens_config(
+                    self.allocator,
+                    self.source_text,
+                    self.source_type,
+                    self.options,
+                )
+            } else if config.is::<TokensParserConfig>() {
+                parse_with_tokens_config(
+                    self.allocator,
+                    self.source_text,
+                    self.source_type,
+                    self.options,
+                )
+            } else if let Some(&config) = config.downcast_ref::<RuntimeParserConfig>() {
+                parse_with_runtime_config(
+                    self.allocator,
+                    self.source_text,
+                    self.source_type,
+                    self.options,
+                    config,
+                )
+            } else {
+                // User-defined `ParserConfig`. Generic codegen here, monomorphized per consuming crate.
+                // Users using custom configs would need to perform the monomorphization themselves.
+                ParserImpl::<C>::new(
+                    self.allocator,
+                    self.source_text,
+                    self.source_type,
+                    self.options,
+                    self.config,
+                    UniquePromise::new(),
+                )
+                .parse()
+            }
         }
 
         /// Parse a single [`Expression`].
@@ -348,27 +401,193 @@ mod parser_parse {
         ///
         /// # Errors
         /// If the source code being parsed has syntax errors.
-        pub fn parse_expression(self) -> Result<Expression<'a>, Vec<OxcDiagnostic>> {
-            let unique = UniquePromise::new();
-            let parser = ParserImpl::new(
-                self.allocator,
-                self.source_text,
-                self.source_type,
-                self.options,
-                unique,
-            );
-            parser.parse_expression()
+        //
+        // # Implementation note
+        // Dispatches via `Any`, same as `parse` does.
+        pub fn parse_expression(self) -> Result<Expression<'a>, Diagnostics> {
+            let config: &dyn Any = &self.config;
+            if config.is::<NoTokensParserConfig>() {
+                parse_expression_with_no_tokens_config(
+                    self.allocator,
+                    self.source_text,
+                    self.source_type,
+                    self.options,
+                )
+            } else if config.is::<TokensParserConfig>() {
+                parse_expression_with_tokens_config(
+                    self.allocator,
+                    self.source_text,
+                    self.source_type,
+                    self.options,
+                )
+            } else if let Some(&config) = config.downcast_ref::<RuntimeParserConfig>() {
+                parse_expression_with_runtime_config(
+                    self.allocator,
+                    self.source_text,
+                    self.source_type,
+                    self.options,
+                    config,
+                )
+            } else {
+                ParserImpl::<C>::new(
+                    self.allocator,
+                    self.source_text,
+                    self.source_type,
+                    self.options,
+                    self.config,
+                    UniquePromise::new(),
+                )
+                .parse_expression()
+            }
         }
+    }
+
+    // ===========================================================================
+    // Non-generic parse helpers, one per known `ParserConfig`.
+    //
+    // The parser is generic over `C: ParserConfig`. By default Rust monomorphizes
+    // generic functions per consuming crate (the legacy mangled name encodes the
+    // instantiating crate's disambiguator, and `share-generics` is off at
+    // `opt-level >= 2`). For a parser that's pulled in by ~15 crates in a real
+    // workspace, that means ~15 private copies of every parser method in the
+    // final cdylib — none of which can be deduped by COMDAT (different names)
+    // or fat LTO (slightly different inlining contexts).
+    //
+    // To avoid that, `Parser<C>::parse` and `Parser<C>::parse_expression` dispatch
+    // via `Any` to one of the helpers below for the three known configs.
+    // Each helper is non-generic, so it's emitted exactly once in `oxc_parser`'s
+    // rlib and shared by all consumers. The `Any::is` / `downcast_ref` checks fold
+    // at compile time when `C` is concrete, so each monomorphization of the dispatch
+    // shrinks to a single call into the matching helper.
+    //
+    // The helpers are `#[inline(never)]` to prevent fat LTO from re-inlining the
+    // parser body across the rlib boundary, which would defeat the purpose.
+    //
+    // For user-defined `ParserConfig` impls (rare), the dispatch falls through
+    // to a generic body that monomorphizes per consuming crate. That's the same
+    // cost the parser had without this pattern; we just keep that cost contained
+    // to the rare custom-config case.
+    // ===========================================================================
+
+    #[inline(never)]
+    fn parse_with_no_tokens_config<'a>(
+        allocator: &'a Allocator,
+        source_text: &'a str,
+        source_type: SourceType,
+        options: ParseOptions,
+    ) -> ParserReturn<'a> {
+        ParserImpl::<NoTokensParserConfig>::new(
+            allocator,
+            source_text,
+            source_type,
+            options,
+            NoTokensParserConfig,
+            UniquePromise::new(),
+        )
+        .parse()
+    }
+
+    #[inline(never)]
+    fn parse_with_tokens_config<'a>(
+        allocator: &'a Allocator,
+        source_text: &'a str,
+        source_type: SourceType,
+        options: ParseOptions,
+    ) -> ParserReturn<'a> {
+        ParserImpl::<TokensParserConfig>::new(
+            allocator,
+            source_text,
+            source_type,
+            options,
+            TokensParserConfig,
+            UniquePromise::new(),
+        )
+        .parse()
+    }
+
+    #[inline(never)]
+    fn parse_with_runtime_config<'a>(
+        allocator: &'a Allocator,
+        source_text: &'a str,
+        source_type: SourceType,
+        options: ParseOptions,
+        config: RuntimeParserConfig,
+    ) -> ParserReturn<'a> {
+        ParserImpl::<RuntimeParserConfig>::new(
+            allocator,
+            source_text,
+            source_type,
+            options,
+            config,
+            UniquePromise::new(),
+        )
+        .parse()
+    }
+
+    #[inline(never)]
+    fn parse_expression_with_no_tokens_config<'a>(
+        allocator: &'a Allocator,
+        source_text: &'a str,
+        source_type: SourceType,
+        options: ParseOptions,
+    ) -> Result<Expression<'a>, Diagnostics> {
+        ParserImpl::<NoTokensParserConfig>::new(
+            allocator,
+            source_text,
+            source_type,
+            options,
+            NoTokensParserConfig,
+            UniquePromise::new(),
+        )
+        .parse_expression()
+    }
+
+    #[inline(never)]
+    fn parse_expression_with_tokens_config<'a>(
+        allocator: &'a Allocator,
+        source_text: &'a str,
+        source_type: SourceType,
+        options: ParseOptions,
+    ) -> Result<Expression<'a>, Diagnostics> {
+        ParserImpl::<TokensParserConfig>::new(
+            allocator,
+            source_text,
+            source_type,
+            options,
+            TokensParserConfig,
+            UniquePromise::new(),
+        )
+        .parse_expression()
+    }
+
+    #[inline(never)]
+    fn parse_expression_with_runtime_config<'a>(
+        allocator: &'a Allocator,
+        source_text: &'a str,
+        source_type: SourceType,
+        options: ParseOptions,
+        config: RuntimeParserConfig,
+    ) -> Result<Expression<'a>, Diagnostics> {
+        ParserImpl::<RuntimeParserConfig>::new(
+            allocator,
+            source_text,
+            source_type,
+            options,
+            config,
+            UniquePromise::new(),
+        )
+        .parse_expression()
     }
 }
 use parser_parse::UniquePromise;
 
 /// Implementation of parser.
 /// `Parser` is just a public wrapper, the guts of the implementation is in this type.
-struct ParserImpl<'a> {
+struct ParserImpl<'a, C: ParserConfig> {
+    /// Options
     options: ParseOptions,
 
-    pub(crate) lexer: Lexer<'a>,
+    pub(crate) lexer: Lexer<'a, C::LexerConfig>,
 
     /// SourceType: JavaScript or TypeScript, Script or Module, jsx support?
     source_type: SourceType,
@@ -401,9 +620,6 @@ struct ParserImpl<'a> {
     /// Parsing context
     ctx: Context,
 
-    /// Context stack for error recovery synchronization
-    context_stack: ParsingContextStack,
-
     /// Ast builder for creating AST nodes
     ast: AstBuilder<'a>,
 
@@ -414,22 +630,24 @@ struct ParserImpl<'a> {
     is_ts: bool,
 }
 
-impl<'a> ParserImpl<'a> {
+impl<'a, C: ParserConfig> ParserImpl<'a, C> {
     /// Create a new `ParserImpl`.
     ///
     /// Requiring a `UniquePromise` to be provided guarantees only 1 `ParserImpl` can exist
     /// on a single thread at one time.
     #[inline]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new(
         allocator: &'a Allocator,
         source_text: &'a str,
         source_type: SourceType,
         options: ParseOptions,
+        config: C,
         unique: UniquePromise,
     ) -> Self {
         Self {
             options,
-            lexer: Lexer::new(allocator, source_text, source_type, unique),
+            lexer: Lexer::new(allocator, source_text, source_type, config.lexer_config(), unique),
             source_type,
             source_text,
             errors: vec![],
@@ -439,32 +657,10 @@ impl<'a> ParserImpl<'a> {
             prev_token_end: 0,
             state: ParserState::new(),
             ctx: Self::default_context(source_type, options),
-            context_stack: ParsingContextStack::new(),
             ast: AstBuilder::new(allocator),
             module_record_builder: ModuleRecordBuilder::new(allocator, source_type),
             is_ts: source_type.is_typescript(),
         }
-    }
-
-    /// Returns the current parsing context from the context stack.
-    ///
-    /// This is used for error recovery synchronization to determine
-    /// the appropriate termination tokens and recovery strategy.
-    #[expect(dead_code, reason = "M6.5: Will be used in Step 3 for error recovery")]
-    #[inline]
-    pub(crate) fn current_context(&self) -> crate::context::ParsingContext {
-        self.context_stack.current()
-    }
-
-    /// Checks if a specific parsing context is currently active in the stack.
-    ///
-    /// This searches the entire context stack, not just the top.
-    /// Useful for checking if we're inside a specific parsing construct
-    /// when making error recovery decisions.
-    #[expect(dead_code, reason = "M6.5: Will be used in Step 3 for error recovery")]
-    #[inline]
-    pub(crate) fn in_context(&self, ctx: crate::context::ParsingContext) -> bool {
-        self.context_stack.is_in_context(ctx)
     }
 
     /// Main entry point
@@ -500,7 +696,7 @@ impl<'a> ParserImpl<'a> {
         }
 
         let mut is_flow_language = false;
-        let mut errors = vec![];
+        let mut errors = Diagnostics::new();
         // only check for `@flow` if the file failed to parse.
         if (!self.lexer.errors.is_empty() || !self.errors.is_empty())
             && let Some(error) = self.flow_error()
@@ -508,48 +704,60 @@ impl<'a> ParserImpl<'a> {
             is_flow_language = true;
             errors.push(error);
         }
-        let (module_record, module_record_errors) = self.module_record_builder.build();
+        let (module_record, mut module_record_errors) = self.module_record_builder.build();
         if errors.len() != 1 {
             errors
                 .reserve(self.lexer.errors.len() + self.errors.len() + module_record_errors.len());
-            errors.extend(self.lexer.errors);
-            errors.extend(self.errors);
-            errors.extend(module_record_errors);
+            errors.append(&mut self.lexer.errors);
+            errors.append(&mut self.errors);
+            errors.append(&mut module_record_errors);
         }
         let irregular_whitespaces =
-            self.lexer.trivia_builder.irregular_whitespaces.into_boxed_slice();
+            std::mem::take(&mut self.lexer.trivia_builder.irregular_whitespaces).into_boxed_slice();
 
         let source_type = program.source_type;
         if source_type.is_unambiguous() {
             if module_record.has_module_syntax {
                 // Resolved to Module - discard deferred script errors (TLA is valid in ESM)
+                // but emit deferred module errors (HTML comments are invalid in ESM)
                 program.source_type = source_type.with_module(true);
+                errors.append(&mut self.lexer.deferred_module_errors);
             } else {
                 // Resolved to Script - emit deferred script errors
+                // discard deferred module errors (HTML comments are valid in scripts)
                 program.source_type = source_type.with_script(true);
                 errors.extend(self.deferred_script_errors);
             }
         }
 
+        let tokens = if panicked {
+            ArenaVec::new_in(self.ast.allocator)
+        } else {
+            self.lexer.finalize_tokens()
+        };
+
+        program.comments = self.lexer.trivia_builder.comments;
+
         ParserReturn {
             program,
             module_record,
-            errors,
+            diagnostics: errors,
             irregular_whitespaces,
+            tokens,
             panicked,
             is_flow_language,
         }
     }
 
-    pub fn parse_expression(mut self) -> Result<Expression<'a>, Vec<OxcDiagnostic>> {
+    pub fn parse_expression(mut self) -> Result<Expression<'a>, Diagnostics> {
         // initialize cur_token and prev_token by moving onto the first token
         self.bump_any();
         let expr = self.parse_expr();
         if let Some(FatalError { error, .. }) = self.fatal_error.take() {
-            return Err(vec![error]);
+            return Err(error.into());
         }
         self.check_unfinished_errors();
-        let errors = self.lexer.errors.into_iter().chain(self.errors).collect::<Vec<_>>();
+        let errors = self.lexer.errors.into_iter().chain(self.errors).collect::<Diagnostics>();
         if !errors.is_empty() {
             return Err(errors);
         }
@@ -563,13 +771,9 @@ impl<'a> ParserImpl<'a> {
         self.token = self.lexer.first_token();
 
         let hashbang = self.parse_hashbang();
-        // M6.5.6 Out of Scope: Parse directives and check for strict mode
-        let (directives, mut statements, has_use_strict) =
-            self.parse_directives_and_statements(/* is_top_level */ true);
-
-        // M6.5.6 Out of Scope: Track program-level strict mode
-        // This would be used for semantic analysis
-        let _ = has_use_strict;
+        self.ctx |= Context::TopLevel;
+        let (directives, mut statements) =
+            self.parse_directives_and_statements(/* in_ts_namespace_body */ false);
 
         // In unambiguous mode, if ESM syntax was detected (import/export/import.meta),
         // we need to reparse statements that were originally parsed with `await` as identifier.
@@ -583,7 +787,8 @@ impl<'a> ParserImpl<'a> {
         }
 
         let span = Span::new(0, self.source_text.len() as u32);
-        let comments = self.ast.vec_from_iter(self.lexer.trivia_builder.comments.iter().copied());
+        // Populated at the end of `parse` after `flow_error` has read from `trivia_builder.comments`.
+        let comments = self.ast.vec();
         self.ast.program(
             span,
             self.source_type,
@@ -604,20 +809,29 @@ impl<'a> ParserImpl<'a> {
         &mut self,
         statements: &mut oxc_allocator::Vec<'a, oxc_ast::ast::Statement<'a>>,
     ) {
+        // Token stream is already complete from the first parse.
+        // Reparsing here is only to patch AST nodes, so keep the original token stream.
+        let original_tokens =
+            if self.lexer.config.tokens() { Some(self.lexer.take_tokens()) } else { None };
+
         let checkpoints = std::mem::take(&mut self.state.potential_await_reparse);
         for (stmt_index, checkpoint) in checkpoints {
             // Rewind to the checkpoint
             self.rewind(checkpoint);
 
-            // Parse the statement with await context enabled
+            // Parse the statement with await context enabled (TopLevel context is already set)
             let stmt = self.context_add(Context::Await, |p| {
-                p.parse_statement_list_item(StatementContext::TopLevelStatementList)
+                p.parse_statement_list_item(StatementContext::StatementList)
             });
 
             // Replace the statement if the index is valid
             if stmt_index < statements.len() {
                 statements[stmt_index] = stmt;
             }
+        }
+
+        if let Some(original_tokens) = original_tokens {
+            self.lexer.set_tokens(original_tokens);
         }
     }
 
@@ -627,9 +841,13 @@ impl<'a> ParserImpl<'a> {
             // for [top-level-await](https://tc39.es/proposal-top-level-await/)
             ctx = ctx.and_await(true);
         }
-        // CommonJS files are wrapped in a function, so return is allowed at top-level
+        // CommonJS files are wrapped in a function, so return and `new.target`
+        // are allowed at top-level
         if options.allow_return_outside_function || source_type.is_commonjs() {
             ctx = ctx.and_return(true);
+        }
+        if source_type.is_commonjs() {
+            ctx = ctx.and_new_target(true);
         }
         ctx
     }
@@ -690,7 +908,7 @@ mod test {
         let source = "";
         let ret = Parser::new(&allocator, source, source_type).parse();
         assert!(ret.program.is_empty());
-        assert!(ret.errors.is_empty());
+        assert!(ret.diagnostics.is_empty());
         assert!(!ret.is_flow_language);
     }
 
@@ -720,8 +938,8 @@ mod test {
         for source in sources {
             let ret = Parser::new(&allocator, source, source_type).parse();
             assert!(ret.is_flow_language);
-            assert_eq!(ret.errors.len(), 1);
-            assert_eq!(ret.errors.first().unwrap().to_string(), "Flow is not supported");
+            assert_eq!(ret.diagnostics.len(), 1);
+            assert_eq!(ret.diagnostics.first().unwrap().to_string(), "Flow is not supported");
         }
     }
 
@@ -731,7 +949,7 @@ mod test {
         let source_type = SourceType::from_path(Path::new("module.ts")).unwrap();
         let source = "declare module 'test'\n";
         let ret = Parser::new(&allocator, source, source_type).parse();
-        assert_eq!(ret.errors.len(), 0);
+        assert_eq!(ret.diagnostics.len(), 0);
     }
 
     #[test]
@@ -758,7 +976,7 @@ mod test {
             let source = "%DebugPrint('Raging against the Dying Light')";
             let opts = ParseOptions { allow_v8_intrinsics: true, ..ParseOptions::default() };
             let ret = Parser::new(&allocator, source, source_type).with_options(opts).parse();
-            assert!(ret.errors.is_empty());
+            assert!(ret.diagnostics.is_empty());
 
             if let Some(Statement::ExpressionStatement(expr_stmt)) = ret.program.body.first() {
                 if let Expression::V8IntrinsicExpression(expr) = &expr_stmt.expression {
@@ -774,17 +992,17 @@ mod test {
             let source = "%DebugPrint(...illegalSpread)";
             let opts = ParseOptions { allow_v8_intrinsics: true, ..ParseOptions::default() };
             let ret = Parser::new(&allocator, source, source_type).with_options(opts).parse();
-            assert_eq!(ret.errors.len(), 1);
+            assert_eq!(ret.diagnostics.len(), 1);
             assert_eq!(
-                ret.errors[0].to_string(),
+                ret.diagnostics[0].to_string(),
                 "V8 runtime calls cannot have spread elements as arguments"
             );
         }
         {
             let source = "%DebugPrint('~~')";
             let ret = Parser::new(&allocator, source, source_type).parse();
-            assert_eq!(ret.errors.len(), 1);
-            assert_eq!(ret.errors[0].to_string(), "Unexpected token");
+            assert_eq!(ret.diagnostics.len(), 1);
+            assert_eq!(ret.diagnostics[0].to_string(), "Unexpected token");
         }
         {
             // https://github.com/oxc-project/oxc/issues/12121
@@ -793,9 +1011,9 @@ mod test {
             // Should not panic whether `allow_v8_intrinsics` is set or not.
             let opts = ParseOptions { allow_v8_intrinsics: true, ..ParseOptions::default() };
             let ret = Parser::new(&allocator, source, source_type).with_options(opts).parse();
-            assert_eq!(ret.errors.len(), 1);
+            assert_eq!(ret.diagnostics.len(), 1);
             let ret = Parser::new(&allocator, source, source_type).parse();
-            assert_eq!(ret.errors.len(), 1);
+            assert_eq!(ret.diagnostics.len(), 1);
         }
     }
 
@@ -844,6 +1062,23 @@ mod test {
             let ret = Parser::new(&allocator, source, source_type).parse();
             assert!(ret.program.source_type.is_script());
         }
+    }
+
+    #[test]
+    fn binary_file() {
+        let allocator = Allocator::default();
+        let source_type = SourceType::default();
+
+        // U+FFFD as a standalone token — file appears to be binary
+        let ret = Parser::new(&allocator, "\u{FFFD}", source_type).parse();
+        assert!(ret.program.is_empty());
+        assert_eq!(ret.diagnostics.len(), 1);
+        assert_eq!(ret.diagnostics[0].to_string(), "File appears to be binary.");
+
+        // U+FFFD inside string literals — should parse fine
+        let ret = Parser::new(&allocator, "\"oops \u{FFFD} oops\";", source_type).parse();
+        assert!(!ret.program.is_empty());
+        assert!(ret.diagnostics.is_empty());
     }
 
     #[test]
@@ -923,8 +1158,11 @@ mod test {
         // Parsing should fail
         assert!(ret.program.is_empty());
         assert!(ret.panicked);
-        assert_eq!(ret.errors.len(), 1);
-        assert_eq!(ret.errors.first().unwrap().to_string(), "Source length exceeds 4 GiB limit");
+        assert_eq!(ret.diagnostics.len(), 1);
+        assert_eq!(
+            ret.diagnostics.first().unwrap().to_string(),
+            "Source length exceeds 4 GiB limit"
+        );
     }
 
     // Source with length MAX_LEN parses OK.
@@ -946,1050 +1184,7 @@ mod test {
         let allocator = Allocator::default();
         let ret = Parser::new(&allocator, &source, SourceType::default()).parse();
         assert!(!ret.panicked);
-        assert!(ret.errors.is_empty());
+        assert!(ret.diagnostics.is_empty());
         assert_eq!(ret.program.body.len(), 2);
-    }
-
-    // M6.5.3: Module/Import/Export Error Recovery Tests
-
-    #[test]
-    fn test_empty_import_call() {
-        let source = r"
-            import();
-            let x = 5;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Should have 1 error for empty import
-        assert_eq!(ret.errors.len(), 1);
-        assert!(ret.errors[0].message.contains("import"));
-
-        // Should have 2 statements (import expression + variable declaration)
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_empty_import_subsequent_code_parsed() {
-        let source = r"
-            import();
-            function foo() { return 42; }
-            class Bar {}
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Error for empty import
-        assert_eq!(ret.errors.len(), 1);
-
-        // All 3 statements should be parsed
-        assert_eq!(ret.program.body.len(), 3);
-    }
-
-    #[test]
-    fn test_import_too_many_args() {
-        let source = "import(source, options, extra);";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Should have error for too many arguments
-        assert!(!ret.errors.is_empty());
-
-        // Import call should still be in AST
-        assert_eq!(ret.program.body.len(), 1);
-    }
-
-    #[test]
-    fn test_import_four_args() {
-        let source = "import(a, b, c, d);";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert!(!ret.errors.is_empty());
-        assert_eq!(ret.program.body.len(), 1);
-    }
-
-    #[test]
-    fn test_import_many_args_with_subsequent_code() {
-        let source = r"
-            import(source, opts, extra1, extra2);
-            const x = 10;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert!(!ret.errors.is_empty());
-        // Both statements parsed
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_invalid_import_meta() {
-        let source = "import.notmeta";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Should have error
-        assert_eq!(ret.errors.len(), 1);
-
-        // Should still have expression in AST
-        assert_eq!(ret.program.body.len(), 1);
-    }
-
-    #[test]
-    fn test_invalid_import_meta_with_subsequent_code() {
-        let source = r"
-            import.invalid;
-            const x = import.meta;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Error for invalid property
-        assert_eq!(ret.errors.len(), 1);
-
-        // Both statements parsed
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_invalid_import_attribute_value() {
-        let source = r#"
-            import "module" with { type: 123 };
-            export class MyClass {}
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Error for non-string attribute value
-        assert_eq!(ret.errors.len(), 1);
-        assert!(ret.errors[0].message.contains("string"));
-
-        // Both import and export should be in AST
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_invalid_import_attribute_identifier_value() {
-        let source = r#"import "m" with { type: invalid };"#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert!(!ret.errors.is_empty());
-        assert_eq!(ret.program.body.len(), 1);
-    }
-
-    #[test]
-    fn test_invalid_import_attribute_with_valid_import_after() {
-        let source = r#"
-            import "m1" with { type: 456 };
-            import { valid } from "m2";
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Error for first import
-        assert!(!ret.errors.is_empty());
-
-        // Both imports in AST
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_multiple_import_export_errors() {
-        let source = r#"
-            import();
-            import { valid } from "other";
-            export class MyClass {}
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // 1 error for empty import
-        assert_eq!(ret.errors.len(), 1);
-
-        // All 3 statements in AST
-        assert_eq!(ret.program.body.len(), 3);
-    }
-
-    #[test]
-    fn test_single_import_error_no_cascade() {
-        let source = r#"
-            import();
-            import { a } from "n";
-            import { b } from "o";
-            export class C {}
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Only 1 error (first import)
-        assert_eq!(ret.errors.len(), 1);
-
-        // All 4 statements parsed
-        assert_eq!(ret.program.body.len(), 4);
-    }
-
-    #[test]
-    fn test_mixed_module_errors() {
-        let source = r#"
-            import();
-            import "m" with { type: 123 };
-            import.invalid;
-            import { valid } from "ok";
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // 3 errors total
-        assert_eq!(ret.errors.len(), 3);
-
-        // All 4 statements in AST
-        assert_eq!(ret.program.body.len(), 4);
-    }
-
-    #[test]
-    fn test_error_recovery_preserves_valid_imports() {
-        let source = r#"
-            import { foo } from "valid1";
-            import();
-            import { bar } from "valid2";
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // 1 error for empty import
-        assert_eq!(ret.errors.len(), 1);
-
-        // All imports in AST
-        assert_eq!(ret.program.body.len(), 3);
-    }
-
-    #[test]
-    fn test_import_error_with_complex_subsequent_code() {
-        let source = r#"
-            import();
-            class Foo {
-                method() {
-                    return import("dynamic");
-                }
-            }
-            function bar() {}
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Error for empty static import
-        assert_eq!(ret.errors.len(), 1);
-
-        // All top-level statements parsed
-        assert_eq!(ret.program.body.len(), 3);
-    }
-
-    #[test]
-    fn test_stress_many_import_errors() {
-        let source = r#"
-            import();
-            import();
-            import();
-            import { valid1 } from "m1";
-            import();
-            import { valid2 } from "m2";
-            import();
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // 5 errors for empty imports
-        assert_eq!(ret.errors.len(), 5);
-
-        // All 7 statements in AST
-        assert_eq!(ret.program.body.len(), 7);
-    }
-
-    #[test]
-    fn test_error_messages_quality() {
-        let source = "import();";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        let error = &ret.errors[0];
-        // Should indicate what's wrong
-        assert!(
-            error.message.contains("import") || error.message.contains("specifier"),
-            "Error should mention import/specifier: {}",
-            error.message
-        );
-    }
-
-    #[test]
-    fn test_import_meta_error_message() {
-        let source = "import.invalid;";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert!(!ret.errors.is_empty());
-        let error = &ret.errors[0];
-        assert!(error.message.contains("import") || error.message.contains("meta"));
-    }
-
-    #[test]
-    fn test_import_attribute_error_message() {
-        let source = r#"import "m" with { type: 123 };"#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        let error = &ret.errors[0];
-        assert!(error.message.contains("string"));
-    }
-
-    // Named import/export error tests
-    #[test]
-    fn test_named_import_with_trailing_comma() {
-        let source = r#"
-            import { a, } from "module";
-            const x = 1;
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Trailing comma is actually valid, so no error
-        assert_eq!(ret.errors.len(), 0);
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_named_import_multiple_valid() {
-        let source = r#"
-            import { a, b, c } from "module";
-            import { d } from "other";
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // All valid
-        assert_eq!(ret.errors.len(), 0);
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_export_named_declaration() {
-        let source = "
-            export { a, b };
-            export { c };
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Valid exports
-        assert_eq!(ret.errors.len(), 0);
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_export_with_from() {
-        let source = "
-            export { a, b } from \"module\";
-            const x = 1;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert_eq!(ret.errors.len(), 0);
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_export_default_class() {
-        let source = "
-            export default class Foo {}
-            const x = 1;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert_eq!(ret.errors.len(), 0);
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_export_default_function() {
-        let source = "
-            export default function foo() {}
-            const x = 1;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert_eq!(ret.errors.len(), 0);
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_import_namespace() {
-        let source = r#"
-            import * as ns from "module";
-            const x = 1;
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert_eq!(ret.errors.len(), 0);
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_import_default_and_named() {
-        let source = r#"
-            import React, { useState } from "react";
-            const x = 1;
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert_eq!(ret.errors.len(), 0);
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    #[test]
-    fn test_mixed_imports_and_exports() {
-        let source = r#"
-            import { a } from "a";
-            export { b };
-            import { c } from "c";
-            export default class D {}
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert_eq!(ret.errors.len(), 0);
-        assert_eq!(ret.program.body.len(), 4);
-    }
-
-    #[test]
-    fn test_import_with_as_renaming() {
-        let source = r#"
-            import { foo as bar } from "module";
-            const x = 1;
-        "#;
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert_eq!(ret.errors.len(), 0);
-        assert_eq!(ret.program.body.len(), 2);
-    }
-
-    // Phase 1.4 & 2.2: Named Import/Export Specifier Error Tests
-
-    #[test]
-    fn test_import_namespace_with_braces() {
-        // import { * } from "./file" - can't import namespace with braces
-        let source = r"
-            import { * } from './module';
-            const x = 1;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Error for invalid syntax
-        assert!(!ret.errors.is_empty(), "Should have at least one error");
-
-        // Both statements should be parsed (import with error + const)
-        assert_eq!(ret.program.body.len(), 2, "Should parse import (with error) and const");
-    }
-
-    #[test]
-    fn test_import_missing_identifier_after_comma() {
-        // import defaultBinding, from "./file" - missing identifier after comma
-        let source = r"
-            import defaultBinding, from './module';
-            const y = 2;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Should have error
-        assert!(!ret.errors.is_empty(), "Should report error for missing identifier");
-
-        // Should still parse both statements
-        assert!(!ret.program.body.is_empty(), "Should parse at least one statement");
-    }
-
-    #[test]
-    fn test_import_leading_comma() {
-        // import , { a } from "./file" - leading comma
-        let source = r"
-            import , { a } from './module';
-            const z = 3;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Should have error
-        assert!(!ret.errors.is_empty(), "Should report error for leading comma");
-
-        // Leading comma is a severe syntax error - parser may not recover fully
-        // Just verify error is reported
-    }
-
-    #[test]
-    fn test_export_trailing_comma() {
-        // export { a, } from "./file" - trailing comma (this is actually valid ES2015+)
-        // But test that it parses correctly
-        let source = r"
-            export { a, } from './module';
-            const w = 4;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Trailing comma in export list is valid in modern JS
-        // Should parse without error or with minimal errors
-        assert_eq!(ret.program.body.len(), 2, "Should parse export and const");
-    }
-
-    #[test]
-    fn test_export_missing_comma() {
-        // export { a b } from "./file" - missing comma between specifiers
-        let source = r"
-            export { a b } from './module';
-            const v = 5;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Should have error for missing comma
-        assert!(!ret.errors.is_empty(), "Should report error for missing comma");
-
-        // Missing comma in export specifier list may not recover fully
-        // At minimum, error should be reported
-    }
-
-    // Phase 4.4: Error Quality Tests
-
-    #[test]
-    fn test_error_message_quality_import_empty() {
-        let source = "import();";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert_eq!(ret.errors.len(), 1, "Should have exactly one error");
-        let error_msg = &ret.errors[0].message;
-
-        // Error message should be clear
-        assert!(
-            error_msg.contains("import")
-                || error_msg.contains("specifier")
-                || error_msg.contains("requires"),
-            "Error should mention import/specifier: {error_msg}"
-        );
-    }
-
-    #[test]
-    fn test_error_message_quality_too_many_args() {
-        let source = "import('a', 'b', 'c');";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        assert_eq!(ret.errors.len(), 1, "Should have exactly one error");
-        let error_msg = &ret.errors[0].message;
-
-        // Error message should mention arguments
-        assert!(
-            error_msg.contains("argument") || error_msg.contains("maximum"),
-            "Error should mention arguments/maximum: {error_msg}"
-        );
-    }
-
-    #[test]
-    fn test_no_cascading_errors() {
-        // Single error should not cause cascade of errors for valid code
-        let source = r"
-            import();
-            import { valid1 } from './a';
-            import { valid2 } from './b';
-            export const x = 1;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Should have only 1 error (the empty import)
-        assert_eq!(ret.errors.len(), 1, "Should have only 1 error, not cascading errors");
-
-        // All 4 statements should be parsed
-        assert_eq!(ret.program.body.len(), 4, "All statements should be parsed");
-    }
-
-    #[test]
-    fn test_error_span_accuracy() {
-        let source = "import { * } from './module';";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Should have at least one error
-        assert!(!ret.errors.is_empty(), "Should have at least one error");
-
-        let error = &ret.errors[0];
-        // Error should have labels with span information
-        assert!(error.labels.is_some(), "Error should have labels with span");
-        if let Some(labels) = &error.labels {
-            assert!(!labels.is_empty(), "Error labels should not be empty");
-        }
-    }
-
-    #[test]
-    fn test_stress_multiple_module_errors() {
-        // Test file with multiple import/export errors
-        let source = r"
-            import();
-            import { * } from './a';
-            import { valid } from './good';
-            export const result = 42;
-        ";
-        let allocator = Allocator::default();
-        let opts = ParseOptions { recover_from_errors: true, ..ParseOptions::default() };
-        let ret = Parser::new(&allocator, source, SourceType::default()).with_options(opts).parse();
-
-        // Should have at least 2 errors (empty import and namespace in braces)
-        assert!(ret.errors.len() >= 2, "Should have at least 2 errors for malformed imports");
-
-        // Should parse multiple statements including valid ones
-        assert!(ret.program.body.len() >= 2, "Should parse at least 2 statements");
-    }
-
-    // M6.5.4: TypeScript-specific error recovery tests
-
-    #[test]
-    fn test_index_signature_missing_type_annotation_recovery() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            interface Config {
-                [key: string]
-                other: string;
-                value: number;
-            }
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should have 1 error for missing type annotation
-        assert_eq!(ret.errors.len(), 1, "Should have exactly 1 error");
-        assert!(
-            ret.errors[0].message.contains("type annotation"),
-            "Error should mention type annotation"
-        );
-
-        // But program should be parsed successfully
-        assert!(!ret.program.body.is_empty(), "Program should not be empty");
-    }
-
-    #[test]
-    fn test_enum_numeric_member_recovery() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            enum Numbers {
-                123 = 'test',
-                Valid = 'success',
-                456 = 'another'
-            }
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should have 2 errors (for 123 and 456)
-        assert_eq!(ret.errors.len(), 2, "Should have exactly 2 errors");
-
-        // Program should still be parsed
-        assert!(!ret.program.body.is_empty(), "Program should not be empty");
-    }
-
-    #[test]
-    fn test_using_declaration_export_recovery() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        // Simpler test: just verify export using is handled without crashing
-        let source = r"
-            export using resource = getResource();
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should report error(s) for export using
-        assert!(!ret.errors.is_empty(), "Should have at least 1 error for export using");
-
-        // Parser should not crash (test passes if we get here)
-    }
-
-    #[test]
-    fn test_typescript_errors_without_recovery_flag() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            interface Config {
-                [key: string]
-                other: string;
-            }
-        ";
-
-        // Parse WITHOUT recovery flag (default)
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = false;
-        let ret = parser.parse();
-
-        // Should still report error (but may not parse everything)
-        assert!(!ret.errors.is_empty(), "Should have at least 1 error");
-    }
-
-    // ==================== M6.5.5: Control Flow Error Recovery Tests ====================
-
-    #[test]
-    fn test_switch_invalid_clause_recovery() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            switch(x) {
-                invalidLabel:
-                case 1: break;
-                default: break;
-            }
-            let y = 5;
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should have error for invalid clause
-        assert!(!ret.errors.is_empty(), "Expected error for invalid switch clause");
-        // Should not panic
-        assert!(!ret.panicked, "Parser should not panic");
-        // Should have parsed subsequent statement
-        assert!(!ret.program.body.is_empty(), "Should parse subsequent statements");
-    }
-
-    #[test]
-    fn test_switch_multiple_invalid_clauses() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            switch(value) {
-                label1:
-                case 1: break;
-                label2:
-                default: break;
-            }
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should have multiple errors
-        assert!(ret.errors.len() >= 2, "Expected at least 2 errors for invalid clauses");
-        assert!(!ret.panicked, "Parser should not panic");
-    }
-
-    #[test]
-    fn test_try_without_catch_or_finally() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            function fn() {
-                try {
-                    getData();
-                }
-                let x = 5;
-            }
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should have error for try without catch/finally
-        assert!(!ret.errors.is_empty(), "Expected error for try without catch/finally");
-        assert!(!ret.panicked, "Parser should not panic");
-    }
-
-    #[test]
-    fn test_catch_without_try() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            function fn() {
-                catch(e) {
-                    log(e);
-                }
-                return null;
-            }
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should have error for catch without try
-        assert!(!ret.errors.is_empty(), "Expected error for catch without try");
-        assert!(!ret.panicked, "Parser should not panic");
-    }
-
-    #[test]
-    fn test_finally_without_try() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            function fn() {
-                finally {
-                    cleanup();
-                }
-                return 42;
-            }
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should have error for finally without try
-        assert!(!ret.errors.is_empty(), "Expected error for finally without try");
-        assert!(!ret.panicked, "Parser should not panic");
-    }
-
-    #[test]
-    fn test_try_with_invalid_catch_parameter() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            try {
-                riskyOperation();
-            } catch(123) {
-                handleError();
-            }
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should have error for invalid catch parameter
-        assert!(!ret.errors.is_empty(), "Expected error for invalid catch parameter");
-        assert!(!ret.panicked, "Parser should not panic");
-    }
-
-    #[test]
-    fn test_nested_try_without_catch() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            try {
-                try {
-                    inner();
-                }
-                outer();
-            } catch(e) {
-                log(e);
-            }
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Inner try should have error, outer should be complete
-        assert!(!ret.errors.is_empty(), "Expected error for inner try without catch/finally");
-        assert!(!ret.panicked, "Parser should not panic");
-    }
-
-    #[test]
-    fn test_for_loop_missing_semicolons() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            for(let i = 0) {
-                console.log(i);
-            }
-            let x = 5;
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should have errors for missing semicolons (recoverable expect())
-        // Parser continues and parses subsequent statements
-        assert!(!ret.panicked, "Parser should not panic");
-        assert!(!ret.program.body.is_empty(), "Should parse statements");
-    }
-
-    #[test]
-    fn test_while_missing_condition() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            while(true) {
-                break;
-            }
-            let x = 5;
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Valid while loop - tests that while loops work with recovery enabled
-        assert!(!ret.panicked, "Parser should not panic");
-        assert!(!ret.program.body.is_empty(), "Should parse statements");
-    }
-
-    #[test]
-    fn test_if_statement_recovery() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            if(condition) {
-                positive();
-            }
-            let x = 5;
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Valid if statement - tests that if statements work with recovery enabled
-        assert!(!ret.panicked, "Parser should not panic");
-        assert!(!ret.program.body.is_empty(), "Should parse statements");
-    }
-
-    #[test]
-    fn test_complex_nested_control_flow_errors() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            function complex() {
-                switch(x) {
-                    invalid:
-                    case 1: break;
-                }
-
-                try {
-                    riskyOp();
-                }
-
-                return 42;
-            }
-        ";
-
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = true;
-        let ret = parser.parse();
-
-        // Should have multiple errors (switch + try)
-        assert!(ret.errors.len() >= 2, "Expected at least 2 errors");
-        assert!(!ret.panicked, "Parser should not panic");
-    }
-
-    #[test]
-    fn test_control_flow_recovery_disabled() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::tsx();
-        let source = r"
-            switch(x) {
-                invalidLabel:
-                case 1: break;
-            }
-        ";
-
-        // Parse WITHOUT recovery flag
-        let mut parser = Parser::new(&allocator, source, source_type);
-        parser.options.recover_from_errors = false;
-        let ret = parser.parse();
-
-        // Without recovery, should panic on error
-        assert!(ret.panicked, "Parser should panic without recovery enabled");
-    }
-
-    // Regression test: Ensure TypeScript function return types work with error recovery
-    // Previously, try_parse() didn't restore token position properly in error recovery mode,
-    // causing TypeScript functions with return type annotations to fail parsing
-    #[test]
-    fn test_typescript_function_with_error_recovery() {
-        let allocator = Allocator::default();
-        let source_type = SourceType::default().with_typescript(true);
-        let source = "function test(x: number): number { return x; }";
-
-        // WITHOUT error recovery - should work
-        let ret_no_recovery = Parser::new(&allocator, source, source_type).parse();
-        assert!(!ret_no_recovery.panicked, "TypeScript function should parse without recovery");
-        assert_eq!(ret_no_recovery.errors.len(), 0, "Should have no errors without recovery");
-        assert_eq!(ret_no_recovery.program.body.len(), 1, "Should parse the function");
-
-        // WITH error recovery - should work correctly
-        let ret_with_recovery = Parser::new(&allocator, source, source_type)
-            .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
-            .parse();
-        assert!(
-            !ret_with_recovery.panicked,
-            "TypeScript function should parse with recovery enabled (panicked={})",
-            ret_with_recovery.panicked
-        );
-        assert_eq!(
-            ret_with_recovery.errors.len(),
-            0,
-            "TypeScript function should have no errors with recovery (errors={})",
-            ret_with_recovery.errors.len()
-        );
-        assert_eq!(
-            ret_with_recovery.program.body.len(),
-            1,
-            "Should parse the function with recovery (statements={})",
-            ret_with_recovery.program.body.len()
-        );
     }
 }

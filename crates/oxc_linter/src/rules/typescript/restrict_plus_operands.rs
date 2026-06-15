@@ -92,8 +92,9 @@ declare_oxc_lint!(
     RestrictPlusOperands(tsgolint),
     typescript,
     pedantic,
-    pending,
     config = RestrictPlusOperandsConfig,
+    version = "1.12.0",
+    short_description = "This rule requires both operands of addition to be the same type and be number, string, or any.",
 );
 
 impl Rule for RestrictPlusOperands {

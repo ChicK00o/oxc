@@ -1,14 +1,12 @@
 use oxc_allocator::{Box, Vec};
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
+use oxc_span::{FileExtension, GetSpan};
 
 use crate::{
-    ParserImpl,
-    context::ParsingContext,
-    diagnostics,
+    Context, ParserConfig as Config, ParserImpl, StatementContext, diagnostics,
     js::{FunctionKind, VariableDeclarationParent},
     lexer::Kind,
-    modifiers::{ModifierFlags, ModifierKind, Modifiers},
+    modifiers::{ModifierKind, ModifierKinds, Modifiers},
 };
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -17,21 +15,22 @@ pub(super) enum CallOrConstructorSignature {
     Constructor,
 }
 
-impl<'a> ParserImpl<'a> {
+impl<'a, C: Config> ParserImpl<'a, C> {
     /* ------------------- Enum ------------------ */
     /// `https://www.typescriptlang.org/docs/handbook/enums.html`
     pub(crate) fn parse_ts_enum_declaration(
         &mut self,
         span: u32,
-        modifiers: &Modifiers<'a>,
+        modifiers: &Modifiers,
     ) -> Declaration<'a> {
         self.bump_any(); // bump `enum`
         let id = self.parse_binding_identifier();
+        self.check_reserved_type_name(&id, "Enum");
         let body = self.parse_ts_enum_body();
         let span = self.end_span(span);
         self.verify_modifiers(
             modifiers,
-            ModifierFlags::DECLARE | ModifierFlags::CONST,
+            ModifierKinds::new([ModifierKind::Declare, ModifierKind::Const]),
             true,
             diagnostics::modifier_cannot_be_used_here,
         );
@@ -48,73 +47,12 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         let opening_span = self.cur_token().span();
         self.expect(Kind::LCurly);
-
-        if self.options.recover_from_errors {
-            self.context_stack.push(ParsingContext::EnumMembers);
-        }
-
-        // Custom loop with error recovery for enum members
-        let mut members = self.ast.vec();
-
-        let kind = self.cur_kind();
-        if kind != Kind::RCurly
-            && !matches!(kind, Kind::Eof | Kind::Undetermined)
-            && self.fatal_error.is_none()
-        {
-            members.push(self.parse_ts_enum_member());
-
-            loop {
-                let kind = self.cur_kind();
-
-                // Check termination conditions
-                if kind == Kind::RCurly
-                    || matches!(kind, Kind::Eof | Kind::Undetermined)
-                    || self.fatal_error.is_some()
-                {
-                    break;
-                }
-
-                // Expect comma separator
-                if kind != Kind::Comma {
-                    let error = diagnostics::expect_closing_or_separator(
-                        Kind::RCurly.to_str(),
-                        Kind::Comma.to_str(),
-                        kind.to_str(),
-                        self.cur_token().span(),
-                        opening_span,
-                    );
-
-                    // Error recovery: decide whether to skip or abort
-                    if self.options.recover_from_errors {
-                        self.error(error);
-                        let decision =
-                            self.synchronize_on_error(crate::context::ParsingContext::EnumMembers);
-                        match decision {
-                            crate::synchronization::RecoveryDecision::Skip => continue,
-                            crate::synchronization::RecoveryDecision::Abort => break,
-                        }
-                    } else {
-                        // M6.5.6: Non-recovery mode - fatal error
-                        self.set_fatal_error(error);
-                        break;
-                    }
-                }
-
-                self.bump(Kind::Comma);
-
-                // Check for trailing comma
-                if self.cur_kind() == Kind::RCurly {
-                    break;
-                }
-
-                members.push(self.parse_ts_enum_member());
-            }
-        }
-
-        if self.options.recover_from_errors {
-            self.context_stack.pop();
-        }
-
+        let (members, _) = self.parse_delimited_list(
+            Kind::RCurly,
+            Kind::Comma,
+            opening_span,
+            Self::parse_ts_enum_member,
+        );
         self.expect(Kind::RCurly);
         self.ast.ts_enum_body(self.end_span(span), members)
     }
@@ -143,62 +81,24 @@ impl<'a> ParserImpl<'a> {
                 }
                 Expression::NumericLiteral(literal) => {
                     let error = diagnostics::enum_member_cannot_have_numeric_name(literal.span());
-                    if self.options.recover_from_errors {
-                        self.error(error);
-                        // Convert numeric literal to valid identifier by prefixing with '_'
-                        let num_str = literal.value.to_string();
-                        let identifier = self
-                            .ast
-                            .identifier_name(literal.span(), self.ast.atom(&format!("_{num_str}")));
-                        TSEnumMemberName::Identifier(self.alloc(identifier))
-                    } else {
-                        self.fatal_error(error)
-                    }
+                    self.fatal_error(error)
                 }
                 expr => {
                     let error =
                         diagnostics::computed_property_names_not_allowed_in_enums(expr.span());
-                    if self.options.recover_from_errors {
-                        self.error(error);
-                        // Create dummy identifier for computed property
-                        let identifier =
-                            self.ast.identifier_name(expr.span(), self.ast.atom("__computed__"));
-                        TSEnumMemberName::Identifier(self.alloc(identifier))
-                    } else {
-                        self.fatal_error(error)
-                    }
+                    self.fatal_error(error)
                 }
             },
             Kind::NoSubstitutionTemplate | Kind::TemplateHead => {
                 let error = diagnostics::computed_property_names_not_allowed_in_enums(
                     self.cur_token().span(),
                 );
-                if self.options.recover_from_errors {
-                    self.error(error);
-                    // Create dummy identifier for template literal
-                    let span = self.cur_token().span();
-                    let identifier = self.ast.identifier_name(span, self.ast.atom("__template__"));
-                    self.bump_any(); // Consume the template token
-                    TSEnumMemberName::Identifier(self.alloc(identifier))
-                } else {
-                    self.fatal_error(error)
-                }
+                self.fatal_error(error)
             }
             kind if kind.is_number() => {
                 let error =
                     diagnostics::enum_member_cannot_have_numeric_name(self.cur_token().span());
-                if self.options.recover_from_errors {
-                    self.error(error);
-                    // Convert numeric token to valid identifier by prefixing with '_'
-                    let span = self.cur_token().span();
-                    let num_str = self.cur_src();
-                    let identifier =
-                        self.ast.identifier_name(span, self.ast.atom(&format!("_{num_str}")));
-                    self.bump_any(); // Consume the numeric token
-                    TSEnumMemberName::Identifier(self.alloc(identifier))
-                } else {
-                    self.fatal_error(error)
-                }
+                self.fatal_error(error)
             }
             _ => {
                 let ident_name = self.parse_identifier_name();
@@ -225,12 +125,22 @@ impl<'a> ParserImpl<'a> {
     pub(crate) fn parse_ts_type_alias_declaration(
         &mut self,
         span: u32,
-        modifiers: &Modifiers<'a>,
+        modifiers: &Modifiers,
     ) -> Declaration<'a> {
         self.expect(Kind::Type);
 
         let id = self.parse_binding_identifier();
-        let params = self.parse_ts_type_parameters();
+        self.check_reserved_type_name(&id, "Type alias");
+        let params = self.parse_ts_type_parameters_with_variance();
+        // A `const` modifier is only valid on a type parameter of a function, method, or class
+        // (TS1277), so reject it on a type alias, e.g. `type T<const U> = ...`.
+        if let Some(type_params) = &params {
+            for param in &type_params.params {
+                if param.r#const {
+                    self.error(diagnostics::const_type_parameter(param.span));
+                }
+            }
+        }
         self.expect(Kind::Eq);
 
         let intrinsic_token = self.cur_token();
@@ -264,7 +174,7 @@ impl<'a> ParserImpl<'a> {
 
         self.verify_modifiers(
             modifiers,
-            ModifierFlags::DECLARE,
+            ModifierKinds::new([ModifierKind::Declare]),
             true,
             diagnostics::modifier_cannot_be_used_here,
         );
@@ -274,19 +184,52 @@ impl<'a> ParserImpl<'a> {
 
     /* ---------------------  Interface  ------------------------ */
 
+    /// A type declaration's name may not be one of the reserved built-in type names
+    /// (`any`, `string`, `number`, ...).
+    pub(crate) fn check_reserved_type_name(
+        &mut self,
+        id: &BindingIdentifier<'a>,
+        syntax_name: &'static str,
+    ) {
+        if matches!(
+            id.name.as_str(),
+            "any"
+                | "unknown"
+                | "never"
+                | "number"
+                | "bigint"
+                | "boolean"
+                | "string"
+                | "symbol"
+                | "void"
+                | "object"
+                | "undefined"
+        ) {
+            self.error(diagnostics::reserved_type_name(id.span, &id.name, syntax_name));
+        }
+    }
+
     pub(crate) fn parse_ts_interface_declaration(
         &mut self,
         span: u32,
-        modifiers: &Modifiers<'a>,
+        modifiers: &Modifiers,
     ) -> Declaration<'a> {
         let id = self.parse_binding_identifier();
-        let type_parameters = self.parse_ts_type_parameters();
+        self.check_reserved_type_name(&id, "Interface");
+        let type_parameters = self.parse_ts_type_parameters_with_variance();
+        if let Some(type_parameters) = &type_parameters {
+            for param in &type_parameters.params {
+                if param.r#const {
+                    self.error(diagnostics::const_type_parameter(param.span));
+                }
+            }
+        }
         let (extends, implements) = self.parse_heritage_clause();
         let body = self.parse_ts_interface_body();
         let extends = extends.unwrap_or_else(|| self.ast.vec());
         self.verify_modifiers(
             modifiers,
-            ModifierFlags::DECLARE,
+            ModifierKinds::new([ModifierKind::Declare]),
             true,
             diagnostics::modifier_cannot_be_used_here,
         );
@@ -313,64 +256,8 @@ impl<'a> ParserImpl<'a> {
 
     fn parse_ts_interface_body(&mut self) -> Box<'a, TSInterfaceBody<'a>> {
         let span = self.start_span();
-        let opening_span = self.cur_token().span();
-        self.expect(Kind::LCurly);
-
-        if self.options.recover_from_errors {
-            self.context_stack.push(ParsingContext::TypeMembers);
-        }
-
-        // Custom loop with error recovery for type members
-        let mut body_list = self.ast.vec();
-        loop {
-            let kind = self.cur_kind();
-
-            // Check termination conditions
-            if kind == Kind::RCurly
-                || matches!(kind, Kind::Eof | Kind::Undetermined)
-                || self.fatal_error.is_some()
-            {
-                break;
-            }
-
-            // Skip semicolons (member separators)
-            if self.eat(Kind::Semicolon) {
-                while self.eat(Kind::Semicolon) {}
-                if self.at(Kind::RCurly) {
-                    break;
-                }
-            }
-
-            // Check if we can start a type member here (for error recovery)
-            if self.options.recover_from_errors
-                && !self
-                    .is_context_element_start(crate::context::ParsingContext::TypeMembers, false)
-            {
-                // Not a valid type member start - report error and synchronize
-                let error = diagnostics::expect_token(
-                    "type member",
-                    self.cur_kind().to_str(),
-                    self.cur_token().span(),
-                );
-                self.error(error);
-
-                let decision =
-                    self.synchronize_on_error(crate::context::ParsingContext::TypeMembers);
-                match decision {
-                    crate::synchronization::RecoveryDecision::Skip => continue,
-                    crate::synchronization::RecoveryDecision::Abort => break,
-                }
-            }
-
-            // Parse type member
-            body_list.push(Self::parse_ts_type_signature(self));
-        }
-
-        if self.options.recover_from_errors {
-            self.context_stack.pop();
-        }
-
-        self.expect_closing(Kind::RCurly, opening_span);
+        let body_list =
+            self.parse_normal_list(Kind::LCurly, Kind::RCurly, Self::parse_ts_type_signature);
         self.ast.alloc_ts_interface_body(self.end_span(span), body_list)
     }
 
@@ -396,7 +283,7 @@ impl<'a> ParserImpl<'a> {
         if self.is_index_signature() {
             self.verify_modifiers(
                 &modifiers,
-                ModifierFlags::READONLY,
+                ModifierKinds::new([ModifierKind::Readonly]),
                 true,
                 diagnostics::cannot_appear_on_an_index_signature,
             );
@@ -407,7 +294,7 @@ impl<'a> ParserImpl<'a> {
 
         self.verify_modifiers(
             &modifiers,
-            ModifierFlags::READONLY,
+            ModifierKinds::new([ModifierKind::Readonly]),
             true,
             diagnostics::cannot_appear_on_a_type_member,
         );
@@ -429,7 +316,7 @@ impl<'a> ParserImpl<'a> {
 
     fn is_unambiguously_index_signature(&mut self) -> bool {
         self.bump_any();
-        if matches!(self.cur_kind(), Kind::Dot3 | Kind::LBrack) {
+        if self.at(Kind::Dot3) {
             return true;
         }
         if self.cur_kind().is_modifier_kind() {
@@ -457,7 +344,7 @@ impl<'a> ParserImpl<'a> {
     fn parse_ts_module_declaration(
         &mut self,
         span: u32,
-        modifiers: &Modifiers<'a>,
+        modifiers: &Modifiers,
     ) -> Box<'a, TSModuleDeclaration<'a>> {
         let kind = if self.eat(Kind::Namespace) {
             TSModuleDeclarationKind::Namespace
@@ -474,11 +361,12 @@ impl<'a> ParserImpl<'a> {
     fn parse_ambient_external_module_declaration(
         &mut self,
         span: u32,
-        modifiers: &Modifiers<'a>,
+        modifiers: &Modifiers,
     ) -> Box<'a, TSModuleDeclaration<'a>> {
         let id = TSModuleDeclarationName::StringLiteral(self.parse_literal_string());
         let body = if self.at(Kind::LCurly) {
-            let block = self.parse_ts_module_block();
+            // External module body (`declare module "x" {}`); `import`/`export` are allowed here.
+            let block = self.parse_ts_module_block(/* in_ts_namespace_body */ false);
             Some(TSModuleDeclarationBody::TSModuleBlock(block))
         } else {
             self.asi();
@@ -486,7 +374,7 @@ impl<'a> ParserImpl<'a> {
         };
         self.verify_modifiers(
             modifiers,
-            ModifierFlags::DECLARE,
+            ModifierKinds::new([ModifierKind::Declare]),
             true,
             diagnostics::modifier_cannot_be_used_here,
         );
@@ -499,14 +387,54 @@ impl<'a> ParserImpl<'a> {
         )
     }
 
-    fn parse_ts_module_block(&mut self) -> Box<'a, TSModuleBlock<'a>> {
+    /// Validate a statement that appears directly in an *internal* namespace body
+    /// (`namespace N {}` / `module N {}`). Module-referencing `import`/`export` forms are not
+    /// permitted there. Called inline from `parse_statement_list_item` while `Context::TsNamespace`
+    /// is set, so the body is never iterated a second time. External modules
+    /// (`declare module "x" {}`) never set the flag, so they remain unrestricted.
+    pub(crate) fn check_namespace_body_statement(&mut self, stmt: &Statement<'a>) {
+        match stmt {
+            Statement::ExportDefaultDeclaration(decl) => {
+                self.error(diagnostics::default_export_in_namespace(decl.span));
+            }
+            Statement::TSExportAssignment(decl) => {
+                self.error(diagnostics::export_assignment_in_namespace(decl.span));
+            }
+            // `export { ... } from "..."` (re-export from a module). A bare `export { ... }`
+            // with no module source re-exports locals and is allowed in a namespace.
+            Statement::ExportNamedDeclaration(decl) if decl.source.is_some() => {
+                self.error(diagnostics::export_in_namespace(decl.span));
+            }
+            Statement::ExportAllDeclaration(decl) => {
+                self.error(diagnostics::export_in_namespace(decl.span));
+            }
+            Statement::TSNamespaceExportDeclaration(decl) => {
+                self.error(diagnostics::global_export_in_namespace(decl.span));
+            }
+            // ES `import "..."` / `import ... from "..."`.
+            Statement::ImportDeclaration(decl) => {
+                self.error(diagnostics::import_in_namespace(decl.span));
+            }
+            // `import x = require("...")` references a module; `import x = A.B` is allowed.
+            Statement::TSImportEqualsDeclaration(decl)
+                if matches!(
+                    decl.module_reference,
+                    TSModuleReference::ExternalModuleReference(_)
+                ) =>
+            {
+                self.error(diagnostics::import_in_namespace(decl.span));
+            }
+            _ => {}
+        }
+    }
+
+    fn parse_ts_module_block(&mut self, in_ts_namespace_body: bool) -> Box<'a, TSModuleBlock<'a>> {
         let span = self.start_span();
         self.expect(Kind::LCurly);
-        // M6.5.6 Out of Scope: Parse directives and check for strict mode
-        let (directives, statements, has_use_strict) =
-            self.parse_directives_and_statements(/* is_top_level */ false);
-        // M6.5.6 Out of Scope: Track strict mode in TS module blocks
-        let _ = has_use_strict;
+        // Remove TopLevel context for module block
+        let (directives, statements) = self.context_remove(Context::TopLevel, |p| {
+            p.parse_directives_and_statements(in_ts_namespace_body)
+        });
         self.expect(Kind::RCurly);
         self.ast.alloc_ts_module_block(self.end_span(span), directives, statements)
     }
@@ -515,7 +443,7 @@ impl<'a> ParserImpl<'a> {
         &mut self,
         span: u32,
         kind: TSModuleDeclarationKind,
-        modifiers: &Modifiers<'a>,
+        modifiers: &Modifiers,
     ) -> Box<'a, TSModuleDeclaration<'a>> {
         let id = TSModuleDeclarationName::Identifier(self.parse_binding_identifier());
         let body = if self.eat(Kind::Dot) {
@@ -523,12 +451,14 @@ impl<'a> ParserImpl<'a> {
             let decl = self.parse_module_or_namespace_declaration(span, kind, &Modifiers::empty());
             TSModuleDeclarationBody::TSModuleDeclaration(decl)
         } else {
-            let block = self.parse_ts_module_block();
+            // Internal namespace body — validate each statement inline as it is parsed
+            // (see `check_namespace_body_statement`), avoiding a second pass over the body.
+            let block = self.parse_ts_module_block(/* in_ts_namespace_body */ true);
             TSModuleDeclarationBody::TSModuleBlock(block)
         };
         self.verify_modifiers(
             modifiers,
-            ModifierFlags::DECLARE,
+            ModifierKinds::new([ModifierKind::Declare]),
             true,
             diagnostics::modifier_cannot_be_used_here,
         );
@@ -544,17 +474,17 @@ impl<'a> ParserImpl<'a> {
     fn parse_ts_global_declaration(
         &mut self,
         span: u32,
-        modifiers: &Modifiers<'a>,
+        modifiers: &Modifiers,
     ) -> Box<'a, TSGlobalDeclaration<'a>> {
         let keyword_span_start = self.start_span();
         self.expect(Kind::Global);
         let keyword_span = self.end_span(keyword_span_start);
 
-        let body = self.parse_ts_module_block().unbox();
+        let body = self.parse_ts_module_block(/* in_ts_namespace_body */ false).unbox();
 
         self.verify_modifiers(
             modifiers,
-            ModifierFlags::DECLARE,
+            ModifierKinds::new([ModifierKind::Declare]),
             true,
             diagnostics::modifier_cannot_be_used_here,
         );
@@ -569,22 +499,38 @@ impl<'a> ParserImpl<'a> {
 
     /* ----------------------- declare --------------------- */
 
-    pub(crate) fn parse_ts_declaration_statement(&mut self, start_span: u32) -> Statement<'a> {
+    pub(crate) fn parse_ts_declaration_statement(
+        &mut self,
+        start_span: u32,
+        stmt_ctx: StatementContext,
+    ) -> Statement<'a> {
         let reserved_ctx = self.ctx;
         let modifiers = self.eat_modifiers_before_declaration();
+        if let Some(modifier) = modifiers.get(ModifierKind::Declare)
+            && reserved_ctx.has_ambient()
+            && !reserved_ctx.has_top_level()
+        {
+            self.error(diagnostics::declare_in_ambient_context(modifier.span()));
+        }
         self.ctx = self
             .ctx
             .union_ambient_if(modifiers.contains_declare())
             .and_await(modifiers.contains_async());
         let decl = self.parse_declaration(start_span, &modifiers, self.ast.vec());
         self.ctx = reserved_ctx;
+        // A TypeScript declaration (`interface`, `type`, `enum`, `namespace`, …) is a
+        // `Declaration`, not a `Statement`, so it cannot stand alone as the body of
+        // `if`/`for`/`while`/`with`/a label — it must be wrapped in a block.
+        if stmt_ctx.is_single_statement() {
+            self.error(diagnostics::declaration_single_statement(decl.span()));
+        }
         Statement::from(decl)
     }
 
     pub(crate) fn parse_declaration(
         &mut self,
         start_span: u32,
-        modifiers: &Modifiers<'a>,
+        modifiers: &Modifiers,
         decorators: Vec<'a, Decorator<'a>>,
     ) -> Declaration<'a> {
         let kind = self.cur_kind();
@@ -599,7 +545,7 @@ impl<'a> ParserImpl<'a> {
                 self.bump_any();
                 self.verify_modifiers(
                     modifiers,
-                    ModifierFlags::DECLARE,
+                    ModifierKinds::new([ModifierKind::Declare]),
                     true,
                     diagnostics::modifier_cannot_be_used_here,
                 );
@@ -612,80 +558,21 @@ impl<'a> ParserImpl<'a> {
                 Declaration::VariableDeclaration(decl)
             }
             Kind::Using if self.is_using_declaration() => {
-                if self.options.recover_from_errors {
-                    // Get identifier for error message before consuming tokens
-                    self.expect(Kind::Using);
-                    let identifier = self.cur_string();
-                    self.error(diagnostics::using_declaration_cannot_be_exported(
-                        identifier,
-                        self.end_span(start_span),
-                    ));
-                    // Parse the using declaration manually (Using token already consumed)
-                    // Parse variable declarators
-                    let kind = VariableDeclarationKind::Using;
-                    let mut declarations = self.ast.vec();
-                    loop {
-                        let declaration = self
-                            .parse_variable_declarator(VariableDeclarationParent::Statement, kind);
-                        declarations.push(declaration);
-                        if !self.eat(Kind::Comma) {
-                            break;
-                        }
-                    }
-                    self.asi();
-                    let using_decl = self.ast.alloc_variable_declaration(
-                        self.end_span(start_span),
-                        kind,
-                        declarations,
-                        false, // declare
-                    );
-                    Declaration::VariableDeclaration(using_decl)
-                } else {
-                    self.expect(Kind::Using);
-                    let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
-                    self.fatal_error(diagnostics::using_declaration_cannot_be_exported(
-                        identifier,
-                        self.end_span(start_span),
-                    ))
-                }
+                self.expect(Kind::Using);
+                let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
+                self.fatal_error(diagnostics::using_declaration_cannot_be_exported(
+                    identifier,
+                    self.end_span(start_span),
+                ))
             }
             Kind::Await if self.is_using_statement() => {
-                if self.options.recover_from_errors {
-                    self.expect(Kind::Await);
-                    self.expect(Kind::Using);
-                    let identifier = self.cur_string();
-                    self.error(diagnostics::using_declaration_cannot_be_exported(
-                        identifier,
-                        self.end_span(start_span),
-                    ));
-                    // Parse the await using declaration manually (Await and Using tokens already consumed)
-                    let kind = VariableDeclarationKind::AwaitUsing;
-                    let mut declarations = self.ast.vec();
-                    loop {
-                        let declaration = self
-                            .parse_variable_declarator(VariableDeclarationParent::Statement, kind);
-                        declarations.push(declaration);
-                        if !self.eat(Kind::Comma) {
-                            break;
-                        }
-                    }
-                    self.asi();
-                    let using_decl = self.ast.alloc_variable_declaration(
-                        self.end_span(start_span),
-                        kind,
-                        declarations,
-                        false, // declare
-                    );
-                    Declaration::VariableDeclaration(using_decl)
-                } else {
-                    self.expect(Kind::Await);
-                    self.expect(Kind::Using);
-                    let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
-                    self.fatal_error(diagnostics::using_declaration_cannot_be_exported(
-                        identifier,
-                        self.end_span(start_span),
-                    ))
-                }
+                self.expect(Kind::Await);
+                self.expect(Kind::Using);
+                let identifier = self.parse_identifier_kind(self.cur_kind()).1.as_str();
+                self.fatal_error(diagnostics::using_declaration_cannot_be_exported(
+                    identifier,
+                    self.end_span(start_span),
+                ))
             }
             Kind::Class => {
                 let decl = self.parse_class_declaration(start_span, modifiers, decorators);
@@ -746,17 +633,18 @@ impl<'a> ParserImpl<'a> {
     pub(crate) fn parse_ts_declare_function(
         &mut self,
         start_span: u32,
-        modifiers: &Modifiers<'a>,
+        modifiers: &Modifiers,
     ) -> Box<'a, Function<'a>> {
         let r#async = modifiers.contains(ModifierKind::Async);
         self.expect(Kind::Function);
+        let generator = self.eat(Kind::Star);
         let func_kind = FunctionKind::TSDeclaration;
-        let id = self.parse_function_id(func_kind, r#async, false);
+        let id = self.parse_function_id(func_kind, r#async, generator);
         self.parse_function(
             start_span,
             id,
             r#async,
-            false,
+            generator,
             func_kind,
             FormalParameterKind::FormalParameter,
             modifiers,
@@ -770,7 +658,13 @@ impl<'a> ParserImpl<'a> {
         self.expect(Kind::RAngle);
         let lhs_span = self.start_span();
         let expression = self.parse_simple_unary_expression(lhs_span);
-        self.ast.expression_ts_type_assertion(self.end_span(span), type_annotation, expression)
+        let span = self.end_span(span);
+
+        if matches!(self.source_type.extension(), Some(FileExtension::Mts | FileExtension::Cts)) {
+            self.error(diagnostics::jsx_type_assertion_in_mts_cts(span));
+        }
+
+        self.ast.expression_ts_type_assertion(span, type_annotation, expression)
     }
 
     pub(crate) fn parse_ts_import_equals_declaration(
@@ -783,18 +677,15 @@ impl<'a> ParserImpl<'a> {
 
         let reference_span = self.start_span();
         let module_reference = if self.eat(Kind::Require) {
-            let opening_span = self.cur_token().span();
             self.expect(Kind::LParen);
             let expression = self.parse_literal_string();
-            // M6.6.0: Use expect_closing to properly pop from paren stack
-            self.expect_closing(Kind::RParen, opening_span);
+            self.expect(Kind::RParen);
             self.ast.ts_module_reference_external_module_reference(
                 self.end_span(reference_span),
                 expression,
             )
         } else {
-            let type_name = self.parse_ts_type_name();
-            TSModuleReference::from(type_name)
+            self.parse_ts_module_reference(reference_span)
         };
 
         self.asi();
@@ -804,8 +695,45 @@ impl<'a> ParserImpl<'a> {
         if !self.is_ts {
             self.error(diagnostics::import_equals_can_only_be_used_in_typescript_files(span));
         }
+        // `import type Foo = Bar.Baz` is not allowed; `import type Foo = require('./foo')` is.
+        if import_kind.is_type() && !module_reference.is_external() {
+            self.error(diagnostics::import_alias_cannot_use_import_type(span));
+        }
 
         self.ast.declaration_ts_import_equals(span, identifier, module_reference, import_kind)
+    }
+
+    /// Parse `TSModuleReference` for `import x = foo` or `import x = foo.bar`.
+    ///
+    /// Unlike `parse_ts_type_name`, this does not allow `this` as the identifier.
+    fn parse_ts_module_reference(&mut self, span: u32) -> TSModuleReference<'a> {
+        // Check for invalid `this` keyword
+        if self.at(Kind::This) {
+            let this_span = self.cur_token().span();
+            self.error(diagnostics::identifier_reserved_word(this_span, "this"));
+            self.bump_any();
+            // Recover by creating a dummy identifier
+            let ident = self.ast.alloc_identifier_reference(this_span, "this");
+            return TSModuleReference::IdentifierReference(ident);
+        }
+
+        let ident = self.parse_identifier_name();
+        let left = self.ast.ts_type_name_identifier_reference(ident.span, ident.name);
+
+        // Parse qualified name: foo.bar.baz
+        let type_name =
+            if self.at(Kind::Dot) { self.parse_ts_qualified_type_name(span, left) } else { left };
+
+        // Convert TSTypeName to TSModuleReference
+        match type_name {
+            TSTypeName::IdentifierReference(ident) => TSModuleReference::IdentifierReference(ident),
+            TSTypeName::QualifiedName(qualified) => TSModuleReference::QualifiedName(qualified),
+            TSTypeName::ThisExpression(_) => {
+                // This shouldn't happen since we check for `this` above,
+                // but handle it for completeness
+                unreachable!("ThisExpression should have been caught earlier")
+            }
+        }
     }
 
     pub(crate) fn parse_ts_this_parameter(&mut self) -> TSThisParameter<'a> {
@@ -818,7 +746,38 @@ impl<'a> ParserImpl<'a> {
     }
 
     pub(crate) fn at_start_of_ts_declaration(&mut self) -> bool {
-        self.lookahead(Self::at_start_of_ts_declaration_worker)
+        // Fast path: the single-keyword declaration forms are decided by `cur_kind` plus at most one
+        // peeked token, so resolve them here instead of paying for the full `lookahead` (checkpoint +
+        // speculative sub-parse + rewind). Each arm mirrors the matching arm of
+        // `at_start_of_ts_declaration_worker` exactly.
+        match self.cur_kind() {
+            // `var x`  `let x`  `const x`  `function f`  `class C`  `enum E`
+            Kind::Var | Kind::Let | Kind::Const | Kind::Function | Kind::Class | Kind::Enum => true,
+            // `interface I`  `type T = …`  (keyword + binding ident on the same line)
+            Kind::Interface | Kind::Type => {
+                let next = self.lexer.peek_token();
+                next.kind().is_binding_identifier() && !next.is_on_new_line()
+            }
+            // `module M`  `module "m"`  `namespace N`  (keyword + binding ident or string)
+            Kind::Module | Kind::Namespace => {
+                let next = self.lexer.peek_token();
+                !next.is_on_new_line()
+                    && (next.kind().is_binding_identifier() || next.kind() == Kind::Str)
+            }
+            // `global { … }`  `global export …`  (`global` + `{` / `export` / ident)
+            Kind::Global => {
+                matches!(self.lexer.peek_token().kind(), Kind::Ident | Kind::LCurly | Kind::Export)
+            }
+            // `import x`  `import "m"`  `import *`  `import {`  (`import` + string / `*` / `{` / ident)
+            Kind::Import => {
+                let next = self.lexer.peek_token().kind();
+                matches!(next, Kind::Str | Kind::Star | Kind::LCurly) || next.is_identifier()
+            }
+            // Multi-token modifier chains (`declare const x`, `abstract class C`, `export type T`,
+            // `async function f`, `static …`) and `export = …` / `export default …` need real
+            // lookahead, as do non-declaration tokens.
+            _ => self.lookahead(Self::at_start_of_ts_declaration_worker),
+        }
     }
 
     /// Check if the parser is at a start of a ts declaration
@@ -826,12 +785,6 @@ impl<'a> ParserImpl<'a> {
         loop {
             match self.cur_kind() {
                 Kind::Var | Kind::Let | Kind::Const | Kind::Function | Kind::Class | Kind::Enum => {
-                    return true;
-                }
-                Kind::Using if self.is_using_declaration() => {
-                    return true;
-                }
-                Kind::Await if self.is_using_statement() => {
                     return true;
                 }
                 Kind::Interface | Kind::Type => {

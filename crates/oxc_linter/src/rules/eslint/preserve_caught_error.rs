@@ -8,6 +8,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_semantic::{IsGlobalReference, ScopeFlags};
 use oxc_span::{GetSpan, Span};
+use oxc_str::static_ident;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -187,6 +188,10 @@ impl<'a> Visit<'a> for ThrowFinder<'a, '_> {
 
     // Do not traverse into nested functions/closures within the catch block
     fn visit_function(&mut self, _func: &Function<'a>, _flags: ScopeFlags) {}
+
+    // Do not traverse into nested catch clauses. They have their own caught error and will be
+    // analyzed separately when visiting their associated `TryStatement`.
+    fn visit_catch_clause(&mut self, _catch_clause: &CatchClause<'a>) {}
 }
 
 fn is_builtin_error_constructor(expr: &Expression, ctx: &LintContext) -> bool {
@@ -194,13 +199,13 @@ fn is_builtin_error_constructor(expr: &Expression, ctx: &LintContext) -> bool {
         return false;
     };
 
-    ident.is_global_reference_name("Error", ctx.scoping())
-        || ident.is_global_reference_name("TypeError", ctx.scoping())
+    ident.is_global_reference_name(static_ident!("Error"), ctx.scoping())
+        || ident.is_global_reference_name(static_ident!("TypeError"), ctx.scoping())
         || is_aggregate_error(ident, ctx)
 }
 
 fn is_aggregate_error(ident: &IdentifierReference, ctx: &LintContext) -> bool {
-    ident.is_global_reference_name("AggregateError", ctx.scoping())
+    ident.is_global_reference_name(static_ident!("AggregateError"), ctx.scoping())
 }
 
 fn has_cause_property(
@@ -237,11 +242,7 @@ fn is_catch_parameter(expr: &Expression, catch_param: &BindingPattern, ctx: &Lin
         return false;
     };
 
-    let Some(reference_id) = ident.reference_id.get() else {
-        return false;
-    };
-
-    let reference = ctx.scoping().get_reference(reference_id);
+    let reference = ctx.scoping().get_reference(ident.reference_id());
     let Some(symbol_id) = reference.symbol_id() else {
         return false;
     };
@@ -284,6 +285,8 @@ declare_oxc_lint!(
     suspicious,
     conditional_fix,
     config = PreserveCaughtErrorOptions,
+    version = "1.16.0",
+    short_description = "Enforces that when re-throwing an error in a catch block, the original error is preserved using the 'cause' property.",
 );
 impl PreserveCaughtError {
     fn check_try_statement<'a>(&self, try_stmt: &'a TryStatement<'a>, ctx: &LintContext<'a>) {
@@ -406,6 +409,10 @@ fn test() {
 					throw new Error("Something went wrong");
 				}"#,
             Some(serde_json::json!([{ "requireCatchParameter": false }])),
+        ),
+        (
+            r#"try { doSomething(); } catch (errorA) { try { doSomethingElse(); } catch (errorB) { throw new Error( `The certificate key "${chalk.yellow(keyFile)}" is invalid.\n${errorA.message}`, { cause: errorB }); } }"#,
+            None,
         ),
     ];
 
@@ -744,7 +751,6 @@ fn test() {
             None,
         ),
         // Throws a new Error, cause property is present but value is a different identifier
-        // Note: This should actually be a valid case since e === err, but still reporting as it's hard to track.
         (
             r#"try {
                         doSomething();

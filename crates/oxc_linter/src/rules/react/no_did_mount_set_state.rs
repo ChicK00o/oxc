@@ -2,14 +2,14 @@ use oxc_ast::{AstKind, ast::Expression};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::{
     AstNode,
     context::LintContext,
     rule::{DefaultRuleConfig, Rule},
-    utils::{is_es5_component, is_es6_component},
+    rules::ContextHost,
+    utils::{AllowedOrDisallowInFunc, is_es5_component, is_es6_component},
 };
 
 fn no_did_mount_set_state_diagnostic(span: Span) -> OxcDiagnostic {
@@ -18,22 +18,16 @@ fn no_did_mount_set_state_diagnostic(span: Span) -> OxcDiagnostic {
         .with_label(span)
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum NoDidMountSetStateConfig {
-    #[default]
-    #[serde(skip)]
-    Allowed,
-    DisallowInFunc,
-}
-
 #[derive(Debug, Default, Clone, Deserialize)]
-pub struct NoDidMountSetState(NoDidMountSetStateConfig);
+pub struct NoDidMountSetState(AllowedOrDisallowInFunc);
 
 declare_oxc_lint!(
     /// ### What it does
     ///
     /// Disallows using `setState` in the `componentDidMount` lifecycle method.
+    ///
+    /// This rule is not relevant for function components, and so can potentially be
+    /// disabled for modern React codebases.
     ///
     /// ### Why is this bad?
     ///
@@ -71,29 +65,17 @@ declare_oxc_lint!(
     ///   }
     /// });
     /// ```
-    ///
-    /// ### Options
-    ///
-    /// The rule accepts a string value `"disallow-in-func"`:
-    ///
-    /// ```json
-    /// {
-    ///   "react/no-did-mount-set-state": ["error", "disallow-in-func"]
-    /// }
-    /// ```
-    ///
-    /// When set, also disallows `setState` calls in nested functions within `componentDidMount`.
     NoDidMountSetState,
     react,
     correctness,
-    config = NoDidMountSetStateConfig,
+    config = AllowedOrDisallowInFunc,
+    version = "1.36.0",
+    short_description = "Disallow usage of `setState` in `componentDidMount`.",
 );
 
 impl Rule for NoDidMountSetState {
     fn from_configuration(value: serde_json::Value) -> Result<Self, serde_json::error::Error> {
-        Ok(serde_json::from_value::<DefaultRuleConfig<Self>>(value)
-            .unwrap_or_default()
-            .into_inner())
+        serde_json::from_value::<DefaultRuleConfig<Self>>(value).map(DefaultRuleConfig::into_inner)
     }
 
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
@@ -153,11 +135,15 @@ impl Rule for NoDidMountSetState {
 
         let in_nested_function = function_count_before_component_did_mount > 1;
 
-        if in_nested_function && !matches!(self.0, NoDidMountSetStateConfig::DisallowInFunc) {
+        if in_nested_function && !matches!(self.0, AllowedOrDisallowInFunc::DisallowInFunc) {
             return;
         }
 
         ctx.diagnostic(no_did_mount_set_state_diagnostic(call_expr.callee.span()));
+    }
+
+    fn should_run(&self, ctx: &ContextHost) -> bool {
+        ctx.source_type().is_jsx()
     }
 }
 

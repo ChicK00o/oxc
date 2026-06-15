@@ -7,7 +7,9 @@ use crate::utils::assignment_like::AssignmentLike;
 use crate::{
     ast_nodes::{AstNode, AstNodes},
     format_args,
-    formatter::{Buffer, Format, Formatter, prelude::*, separated::FormatSeparatedIter},
+    formatter::{
+        Buffer, Format, JsFormatContext, JsFormatter, prelude::*, separated::FormatSeparatedIter,
+    },
     options::TrailingSeparator,
     write,
 };
@@ -15,8 +17,8 @@ use crate::{
 use super::FormatWrite;
 
 impl<'a> FormatWrite<'a> for AstNode<'a, VariableDeclaration<'a>> {
-    fn write(&self, f: &mut Formatter<'_, 'a>) {
-        let semicolon = match self.parent {
+    fn write(&self, f: &mut JsFormatter<'_, 'a>) {
+        let semicolon = match self.parent() {
             AstNodes::ExportNamedDeclaration(_) => false,
             AstNodes::ForStatement(stmt) => {
                 stmt.init().is_some_and(|init| init.span() != self.span())
@@ -42,8 +44,8 @@ impl<'a> FormatWrite<'a> for AstNode<'a, VariableDeclaration<'a>> {
     }
 }
 
-impl<'a> Format<'a> for AstNode<'a, Vec<'a, VariableDeclarator<'a>>> {
-    fn fmt(&self, f: &mut Formatter<'_, 'a>) {
+impl<'a> Format<'a, JsFormatContext<'a>> for AstNode<'a, Vec<'a, VariableDeclarator<'a>>> {
+    fn fmt(&self, f: &mut JsFormatter<'_, 'a>) {
         let length = self.len();
 
         let is_parent_for_loop = matches!(
@@ -70,7 +72,7 @@ impl<'a> Format<'a> for AstNode<'a, Vec<'a, VariableDeclarator<'a>>> {
         if length == 1 && !f.comments().has_comment_before(first_declarator.span().start) {
             return if first_declarator.init.is_none()
                 && f.comments()
-                    .has_comment_in_range(first_declarator.span.end, self.parent.span().end)
+                    .has_comment_in_range(first_declarator.span.end, self.parent().span().end)
             {
                 write!(f, indent(&first_declarator));
             } else {
@@ -94,7 +96,7 @@ impl<'a> Format<'a> for AstNode<'a, Vec<'a, VariableDeclarator<'a>>> {
 }
 
 impl<'a> FormatWrite<'a> for AstNode<'a, VariableDeclarator<'a>> {
-    fn write(&self, f: &mut Formatter<'_, 'a>) {
+    fn write(&self, f: &mut JsFormatter<'_, 'a>) {
         AssignmentLike::VariableDeclarator(self).fmt(f);
     }
 }

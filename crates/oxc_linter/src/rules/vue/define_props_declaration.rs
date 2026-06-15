@@ -38,7 +38,7 @@ pub struct DefinePropsDeclaration(DeclarationStyle);
 declare_oxc_lint!(
     /// ### What it does
     ///
-    /// This rule enforces `defineProps` typing style which you should use `type-based` or `runtime` declaration.
+    /// Enforce consistent declaration style for `defineProps` in Vue.
     /// This rule only works in `<script setup>` with `lang="ts"`.
     ///
     /// ### Why is this bad?
@@ -85,6 +85,8 @@ declare_oxc_lint!(
     vue,
     style,
     config = DeclarationStyle,
+    version = "1.15.0",
+    short_description = "Enforce consistent declaration style for `defineProps` in Vue.",
 );
 
 impl Rule for DefinePropsDeclaration {
@@ -131,77 +133,77 @@ fn test() {
     let pass = vec![
         (
             r#"
-			      <script setup lang="ts">
-			      const props = defineProps<{
-			        kind: string;
-			      }>()
-			      </script>
-			      "#,
+                  <script setup lang="ts">
+                  const props = defineProps<{
+                    kind: string;
+                  }>()
+                  </script>
+                  "#,
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ), // { "parserOptions": { "parser": require.resolve("@typescript-eslint/parser") } },
         (
             r#"
-			      <script setup lang="ts">
-			      const props = defineProps<{
-			        kind: string;
-			      }>()
-			      </script>
-			      "#,
+                  <script setup lang="ts">
+                  const props = defineProps<{
+                    kind: string;
+                  }>()
+                  </script>
+                  "#,
             Some(serde_json::json!(["type-based"])),
             None,
             Some(PathBuf::from("test.vue")),
         ), // { "parserOptions": { "parser": require.resolve("@typescript-eslint/parser") } },
         (
             r#"
-			      <script setup lang="ts">
-			      const props = defineProps({
-			        kind: { type: String },
-			      })
-			      </script>
-			      "#,
+                  <script setup lang="ts">
+                  const props = defineProps({
+                    kind: { type: String },
+                  })
+                  </script>
+                  "#,
             Some(serde_json::json!(["runtime"])),
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             "
-			      <script setup>
-			      const props = defineProps({
-			        kind: { type: String },
-			      })
-			      </script>
-			      ",
+                  <script setup>
+                  const props = defineProps({
+                    kind: { type: String },
+                  })
+                  </script>
+                  ",
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             r#"
-			      <script setup lang="ts">
-			      const emit = defineEmits({
-			        click: (event: PointerEvent) => !!event
-			      })
-			      </script>
-			      "#,
+                  <script setup lang="ts">
+                  const emit = defineEmits({
+                    click: (event: PointerEvent) => !!event
+                  })
+                  </script>
+                  "#,
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ), // { "parserOptions": { "parser": require.resolve("@typescript-eslint/parser") } }
         (
             r#"
-			        <script lang="ts">
-			        import { PropType } from 'vue'
+                    <script lang="ts">
+                    import { PropType } from 'vue'
 
-			        export default {
-			          props: {
-			            kind: { type: String as PropType<'primary' | 'secondary'> },
-			          },
-			          emits: ['check']
-			        }
-			        </script>
-			      "#,
+                    export default {
+                      props: {
+                        kind: { type: String as PropType<'primary' | 'secondary'> },
+                      },
+                      emits: ['check']
+                    }
+                    </script>
+                  "#,
             None,
             None,
             Some(PathBuf::from("test.vue")),
@@ -211,36 +213,36 @@ fn test() {
     let fail = vec![
         (
             r#"
-			      <script setup lang="ts">
-			      const props = defineProps({
-			        kind: { type: String },
-			      })
-			      </script>
-			      "#,
+                  <script setup lang="ts">
+                  const props = defineProps({
+                    kind: { type: String },
+                  })
+                  </script>
+                  "#,
             None,
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             r#"
-			      <script setup lang="ts">
-			      const props = defineProps({
-			        kind: { type: String },
-			      })
-			      </script>
-			      "#,
+                  <script setup lang="ts">
+                  const props = defineProps({
+                    kind: { type: String },
+                  })
+                  </script>
+                  "#,
             Some(serde_json::json!(["type-based"])),
             None,
             Some(PathBuf::from("test.vue")),
         ),
         (
             r#"
-			      <script setup lang="ts">
-			      const props = defineProps<{
-			        kind: string;
-			      }>()
-			      </script>
-			      "#,
+                  <script setup lang="ts">
+                  const props = defineProps<{
+                    kind: string;
+                  }>()
+                  </script>
+                  "#,
             Some(serde_json::json!(["runtime"])),
             None,
             Some(PathBuf::from("test.vue")),

@@ -118,6 +118,18 @@ export interface DecoratorOptions {
    * @default false
    */
   emitDecoratorMetadata?: boolean
+  /**
+   * Aligns nullable-union `design:type` emission with `--strictNullChecks`.
+   *
+   * When `true` (default), `T | null` and `T | undefined` emit `Object`, matching tsc strict.
+   * When `false`, `null` and `undefined` are elided from the union so the underlying
+   * primitive constructor is emitted, matching tsc with `--strictNullChecks=false`
+   * and `babel-plugin-transform-typescript-metadata`.
+   *
+   * @see https://www.typescriptlang.org/tsconfig/#strictNullChecks
+   * @default true
+   */
+  strictNullChecks?: boolean
 }
 
 export interface Es2015Options {
@@ -185,7 +197,7 @@ export declare function isolatedDeclarationSync(filename: string, sourceText: st
 /**
  * Configure how TSX and JSX are transformed.
  *
- * @see {@link https://babeljs.io/docs/babel-plugin-transform-react-jsx#options}
+ * @see {@link https://oxc.rs/docs/guide/usage/transformer/jsx}
  */
 export interface JsxOptions {
   /**
@@ -201,8 +213,6 @@ export interface JsxOptions {
    * Emit development-specific information, such as `__source` and `__self`.
    *
    * @default false
-   *
-   * @see {@link https://babeljs.io/docs/babel-plugin-transform-react-jsx-development}
    */
   development?: boolean
   /**
@@ -216,11 +226,7 @@ export interface JsxOptions {
    */
   throwIfNamespace?: boolean
   /**
-   * Enables `@babel/plugin-transform-react-pure-annotations`.
-   *
-   * It will mark JSX elements and top-level React method calls as pure for tree shaking.
-   *
-   * @see {@link https://babeljs.io/docs/en/babel-plugin-transform-react-pure-annotations}
+   * Mark JSX elements and top-level React method calls as pure for tree shaking.
    *
    * @default true
    */
@@ -250,23 +256,6 @@ export interface JsxOptions {
    * @default 'React.Fragment'
    */
   pragmaFrag?: string
-  /**
-   * When spreading props, use `Object.assign` directly instead of an extend helper.
-   *
-   * Only used for `classic` {@link runtime}.
-   *
-   * @default false
-   */
-  useBuiltIns?: boolean
-  /**
-   * When spreading props, use inline object with spread elements directly
-   * instead of an extend helper or Object.assign.
-   *
-   * Only used for `classic` {@link runtime}.
-   *
-   * @default false
-   */
-  useSpread?: boolean
   /**
    * Enable React Fast Refresh .
    *
@@ -340,6 +329,97 @@ export interface PluginsOptions {
   taggedTemplateEscape?: boolean
 }
 
+/** Dynamic gating for {@link ReactCompilerOptions#dynamicGating}. */
+export interface ReactCompilerDynamicGating {
+  /** Module the gating import comes from. */
+  source: string
+}
+
+/** Static gating for {@link ReactCompilerOptions#gating}. */
+export interface ReactCompilerGating {
+  /** Module the gating import comes from. */
+  source: string
+  /** Imported specifier used as the gate. */
+  importSpecifierName: string
+}
+
+/**
+ * Options for the experimental [React Compiler](https://github.com/react/react/tree/main/compiler).
+ *
+ * Mirrors the compiler's `PluginOptions`. The deep `environment` configuration
+ * (inference / validation flags) is not surfaced here.
+ *
+ * @see {@link TransformOptions#reactCompiler}
+ */
+export interface ReactCompilerOptions {
+  /**
+   * Which functions to compile.
+   *
+   * @default 'infer'
+   */
+  compilationMode?: 'infer' | 'syntax' | 'annotation' | 'all'
+  /**
+   * What to do when a function cannot be compiled.
+   *
+   * @default 'none'
+   */
+  panicThreshold?: 'none' | 'critical_errors' | 'all_errors'
+  /**
+   * React runtime version target. `17` and `18` require the
+   * `react-compiler-runtime` package; `19` ships the runtime in `react`.
+   *
+   * @default '19'
+   */
+  target?: '17' | '18' | '19'
+  /**
+   * Analyze and report diagnostics only; emit no transformed code.
+   *
+   * @default false
+   */
+  noEmit?: boolean
+  /**
+   * Compiler output mode.
+   *
+   * @default undefined
+   */
+  outputMode?: 'client' | 'ssr' | 'lint'
+  /**
+   * Compile even functions marked with the `"use no memo"` / `"use no forget"`
+   * opt-out directives.
+   *
+   * @default false
+   */
+  ignoreUseNoForget?: boolean
+  /**
+   * Treat Flow suppression comments as opt-outs.
+   *
+   * @default true
+   */
+  flowSuppressions?: boolean
+  /**
+   * Enable `react-native-reanimated` support.
+   *
+   * @default false
+   */
+  enableReanimated?: boolean
+  /**
+   * Development mode (extra validation / instrumentation).
+   *
+   * @default false
+   */
+  isDev?: boolean
+  /** Source file name, used for the fast-refresh hash and in diagnostics. */
+  filename?: string
+  /** ESLint rules whose suppressions opt a function out of compilation. */
+  eslintSuppressionRules?: Array<string>
+  /** Extra directives that opt a function out of compilation. */
+  customOptOutDirectives?: Array<string>
+  /** Also emit a gated (feature-flagged) version of each compiled function. */
+  gating?: ReactCompilerGating
+  /** Dynamically-gated compilation. */
+  dynamicGating?: ReactCompilerDynamicGating
+}
+
 export interface ReactRefreshOptions {
   /**
    * Specify the identifier of the refresh registration variable.
@@ -359,7 +439,7 @@ export interface ReactRefreshOptions {
 /**
  * Configure how styled-components are transformed.
  *
- * @see {@link https://styled-components.com/docs/tooling#babel-plugin}
+ * @see {@link https://oxc.rs/docs/guide/usage/transformer/plugins#styled-components}
  */
 export interface StyledComponentsOptions {
   /**
@@ -387,7 +467,10 @@ export interface StyledComponentsOptions {
    * Transpiles styled-components tagged template literals to a smaller representation
    * than what Babel normally creates, helping to reduce bundle size.
    *
-   * @default true
+   * Disabled by default because Oxc does not down-level template literals, so this
+   * transform only increases output size.
+   *
+   * @default false
    */
   transpileTemplateLiterals?: boolean
   /**
@@ -454,6 +537,13 @@ export declare function transform(filename: string, sourceText: string, options?
 /**
  * Options for transforming a JavaScript or TypeScript file.
  *
+ * Options are listed in evaluation order: the source is parsed (`lang`,
+ * `sourceType`), declarations are emitted (`typescript.declaration`), then
+ * transforms run (`reactCompiler`, `typescript`, `decorator`, `plugins`,
+ * `jsx`, `target`), followed by the `inject` and `define` plugins, and
+ * finally codegen (`sourcemap`). `helpers` configures the runtime helpers
+ * the transforms emit.
+ *
  * @see {@link transform}
  */
 export interface TransformOptions {
@@ -466,21 +556,35 @@ export interface TransformOptions {
    * options.
    */
   cwd?: string
-  /**
-   * Enable source map generation.
-   *
-   * When `true`, the `sourceMap` field of transform result objects will be populated.
-   *
-   * @default false
-   *
-   * @see {@link SourceMap}
-   */
-  sourcemap?: boolean
   /** Set assumptions in order to produce smaller output. */
   assumptions?: CompilerAssumptions
-  /** Configure how TypeScript is transformed. */
+  /**
+   * Enable the experimental [React Compiler](https://github.com/react/react/tree/main/compiler).
+   *
+   * `true` enables it with default options; an object enables it with the
+   * given options; `false` or omitted disables it. When enabled, the compiler
+   * runs as the first transform and memoizes React components and hooks.
+   */
+  reactCompiler?: boolean | ReactCompilerOptions
+  /**
+   * Configure how TypeScript is transformed.
+   *
+   * `typescript.declaration` is evaluated before all transforms.
+   *
+   * @see {@link https://oxc.rs/docs/guide/usage/transformer/typescript}
+   */
   typescript?: TypeScriptOptions
-  /** Configure how TSX and JSX are transformed. */
+  /** Decorator plugin */
+  decorator?: DecoratorOptions
+  /**
+   * Third-party plugins to use.
+   * @see {@link https://oxc.rs/docs/guide/usage/transformer/plugins}
+   */
+  plugins?: PluginsOptions
+  /**
+   * Configure how TSX and JSX are transformed.
+   * @see {@link https://oxc.rs/docs/guide/usage/transformer/jsx}
+   */
   jsx?: 'preserve' | JsxOptions
   /**
    * Sets the target environment for the generated JavaScript.
@@ -494,19 +598,37 @@ export interface TransformOptions {
    *
    * @default `esnext` (No transformation)
    *
-   * @see [esbuild#target](https://esbuild.github.io/api/#target)
+   * @see {@link https://oxc.rs/docs/guide/usage/transformer/lowering#target}
    */
   target?: string | Array<string>
   /** Behaviour for runtime helpers. */
   helpers?: Helpers
-  /** Define Plugin */
-  define?: Record<string, string>
-  /** Inject Plugin */
+  /**
+   * Inject Plugin
+   *
+   * Runs after all transforms.
+   *
+   * @see {@link https://oxc.rs/docs/guide/usage/transformer/global-variable-replacement#inject}
+   */
   inject?: Record<string, string | [string, string]>
-  /** Decorator plugin */
-  decorator?: DecoratorOptions
-  /** Third-party plugins to use. */
-  plugins?: PluginsOptions
+  /**
+   * Define Plugin
+   *
+   * Runs after the inject plugin.
+   *
+   * @see {@link https://oxc.rs/docs/guide/usage/transformer/global-variable-replacement#define}
+   */
+  define?: Record<string, string>
+  /**
+   * Enable source map generation.
+   *
+   * When `true`, the `sourceMap` field of transform result objects will be populated.
+   *
+   * @default false
+   *
+   * @see {@link SourceMap}
+   */
+  sourcemap?: boolean
 }
 
 export interface TransformResult {
@@ -624,6 +746,24 @@ export interface TypeScriptOptions {
    * Defaults to `false`.
    */
   removeClassFieldsWithoutInitializer?: boolean
+  /**
+   * When true, optimize const enums by inlining their values at usage sites
+   * and removing the enum declaration.
+   *
+   * @default false
+   */
+  optimizeConstEnums?: boolean
+  /**
+   * When true, optimize regular (non-const) enums by inlining their member
+   * accesses at usage sites when the member value is statically known.
+   *
+   * Non-exported enum declarations are also removed when all members are
+   * evaluable and no references to the enum as a runtime value exist
+   * (e.g., `console.log(Foo)`, `typeof Foo`, or passing the enum as an argument).
+   *
+   * @default false
+   */
+  optimizeEnums?: boolean
   /**
    * Also generate a `.d.ts` declaration file for TypeScript files.
    *

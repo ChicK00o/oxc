@@ -3,31 +3,55 @@ packages:
   - napi/*
   - wasm/*
   - npm/*
-  - editors/*
-  - plugins/
   - tasks/e2e
   - tasks/transform_conformance
   - tasks/compat_data
-  - tasks/mcp
 
 catalog:
-  "@arethetypeswrong/core": 0.18.2
-  "@napi-rs/cli": 3.5.1
-  "@napi-rs/wasm-runtime": 1.1.0
+  "@emnapi/core": 1.11.1
+  "@emnapi/runtime": 1.11.1
+  "@arethetypeswrong/core": 0.18.3
+  "@napi-rs/cli": 3.7.2
+  "@napi-rs/wasm-runtime": 1.1.5
   "@types/node": 24.1.0
   cross-env: ^10.1.0
-  eslint: 9.36.0
-  publint: 0.3.15
-  rolldown: 1.0.0-beta.60
-  tsdown: 0.19.0
-  typescript: 5.9.3
-  vitest: 4.0.15
+  degit: 3.4.7
+  eslint: 10.4.1
+  json-schema-to-typescript: ^15.0.4
+  publint: 0.3.21
+  rolldown: 1.1.1
+  tsdown: 0.22.2
+  vite-plus: 0.1.24
+  vitest: 4.1.8
 
-onlyBuiltDependencies:
-  - "@vscode/vsce-sign@2.0.8"
-  - esbuild@0.25.11
+overrides:
+  rolldown: "catalog:"
 
-patchedDependencies:
-  prettier-plugin-tailwindcss@0.7.2: patches/prettier-plugin-tailwindcss@0.7.2.patch
+allowBuilds:
+  "@vscode/vsce-sign@2.0.8": true
+  esbuild@0.27.7: true
+  esbuild@0.28.0: true
+  "@nestjs/core@11.1.9": false
 
 verifyDepsBeforeRun: install
+minimumReleaseAgeExclude:
+  - "@napi-rs/*"
+  - "@oxc-parser/*"
+  - "@oxc-project/*"
+  - "@oxfmt/*"
+  - "@oxlint-tsgolint/*"
+  - "@oxlint/*"
+  - "@rolldown/*"
+  - "@tsdown/*"
+  - "@vitejs/devtools"
+  - "@vitest/*"
+  - "@voidzero-dev/*"
+  - oxc-parser
+  - oxfmt
+  - oxlint
+  - oxlint-tsgolint
+  - rolldown
+  - tsdown
+  - vite
+  - vite-plus
+  - vitest

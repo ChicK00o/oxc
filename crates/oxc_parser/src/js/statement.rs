@@ -1,17 +1,16 @@
 use oxc_allocator::{Box, Vec};
 use oxc_ast::ast::*;
-use oxc_span::{Atom, GetSpan, Span};
+use oxc_span::{GetSpan, Span};
+use oxc_str::Str;
 
 use super::{VariableDeclarationParent, grammar::CoverGrammar};
 use crate::{
-    Context, ParserImpl, StatementContext,
-    context::ParsingContext,
-    diagnostics,
+    Context, ParserConfig as Config, ParserImpl, StatementContext, diagnostics,
     lexer::Kind,
-    modifiers::{Modifier, ModifierFlags, ModifierKind, Modifiers},
+    modifiers::{ModifierKind, Modifiers},
 };
 
-impl<'a> ParserImpl<'a> {
+impl<'a, C: Config> ParserImpl<'a, C> {
     // Section 12
     // The InputElementHashbangOrRegExp goal is used at the start of a Script
     // or Module.
@@ -21,7 +20,7 @@ impl<'a> ParserImpl<'a> {
             self.bump_any();
             let span = self.end_span(span);
             let src = &self.source_text[span.start as usize + 2..span.end as usize];
-            Some(self.ast.hashbang(span, Atom::from(src)))
+            Some(self.ast.hashbang(span, Str::from(src)))
         } else {
             None
         }
@@ -33,58 +32,50 @@ impl<'a> ParserImpl<'a> {
     ///     `StatementList`[?Yield, ?Await, ?Return] `StatementListItem`[?Yield, ?Await, ?Return]
     pub(crate) fn parse_directives_and_statements(
         &mut self,
-        is_top_level: bool,
-    ) -> (Vec<'a, Directive<'a>>, Vec<'a, Statement<'a>>, bool) {
+        in_ts_namespace_body: bool,
+    ) -> (Vec<'a, Directive<'a>>, Vec<'a, Statement<'a>>) {
         let mut directives = self.ast.vec();
         let mut statements = self.ast.vec();
-        let mut has_use_strict = false;
 
-        let stmt_ctx = if is_top_level {
-            StatementContext::TopLevelStatementList
-        } else {
-            StatementContext::StatementList
-        };
+        let is_top_level = self.ctx.has_top_level();
+        let stmt_ctx = StatementContext::StatementList;
+        let is_ambient_block = (is_top_level || in_ts_namespace_body) && self.ctx.has_ambient();
+        let mut reported_ambient_statement = false;
 
-        // Check if we need to track potential await reparsing.
-        // This is only needed in unambiguous mode at top level when not in await context.
-        let mut track_await_reparse =
-            is_top_level && self.source_type.is_unambiguous() && !self.ctx.has_await();
+        // In unambiguous mode, top-level `await` parses as an identifier until ESM
+        // syntax commits to the Module goal.
+        let track_await_reparse = is_top_level && self.source_type.is_unambiguous();
 
         let mut expecting_directives = true;
         while !self.has_fatal_error() {
             if !is_top_level && self.at(Kind::RCurly) {
                 break;
             }
-            let before = self.cur_token();
-            // Once ESM syntax is detected, enable await context for remaining statements
-            // and stop tracking (we'll reparse earlier statements at the end)
-            if track_await_reparse && self.module_record_builder.has_module_syntax() {
-                track_await_reparse = false;
-                self.ctx = self.ctx.and_await(true);
-            }
 
-            // Take checkpoint for every statement when tracking await reparse.
-            // We reset the flag and only store the checkpoint if an await identifier
-            // was actually encountered during parsing.
-            let checkpoint = if track_await_reparse {
-                self.state.encountered_await_identifier = false;
-                Some((statements.len(), self.checkpoint()))
+            // Commit once module syntax is detected (`export` commits eagerly in
+            // `parse_export_declaration`; `has_module_syntax()` excludes TS's
+            // script-compatible `import x = ns.foo`). Until committed, checkpoint each
+            // statement so an `await` identifier in it can be reparsed.
+            let checkpoint = if track_await_reparse && !self.ctx.has_await() {
+                if self.module_record_builder.has_module_syntax() {
+                    self.ctx = self.ctx.and_await(true);
+                    None
+                } else {
+                    self.state.encountered_await_identifier = false;
+                    Some((statements.len(), self.checkpoint()))
+                }
             } else {
                 None
             };
-            let stmt = self.parse_statement_list_item(stmt_ctx);
-            if self.cur_token().start() == before.start() && self.cur_kind() == before.kind() {
-                if self.cur_kind() == Kind::Eof {
-                    break;
-                }
-                self.error(diagnostics::unexpected_token(self.cur_token().span()));
-                self.bump_any();
-                continue;
-            }
 
-            // Store checkpoint only if await identifier was encountered
+            let stmt = self.parse_statement_list_item(stmt_ctx);
+
+            // Don't reparse a module declaration: `export` already committed to the
+            // Module goal while parsing, so reparsing would record the export twice.
+            // e.g. `@foo export default class C { x = await + 1 }`
             if let Some((stmt_index, checkpoint)) = checkpoint
                 && self.state.encountered_await_identifier
+                && !stmt.is_module_declaration()
             {
                 self.state.potential_await_reparse.push((stmt_index, checkpoint));
             }
@@ -100,30 +91,31 @@ impl<'a> ParserImpl<'a> {
                     if expr.span.start == string.span.start {
                         let src = &self.source_text
                             [string.span.start as usize + 1..string.span.end as usize - 1];
-
-                        // M6.5.6 Out of Scope: Check for "use strict" directive
-                        if src == "use strict" && !has_use_strict {
-                            has_use_strict = true;
-                            // M6.5.6 Out of Scope: Enable strict mode for remaining parsing
-                            // Add StrictMode to the current context
-                            self.ctx = self.ctx.union(Context::StrictMode);
-                        }
-
                         let directive =
-                            self.ast.directive(expr.span, (*string).clone(), Atom::from(src));
+                            self.ast.directive(expr.span, (*string).clone(), Str::from(src));
                         directives.push(directive);
                         continue;
                     }
                 }
                 expecting_directives = false;
             }
+            // In an internal namespace body, module-referencing `import`/`export` statements are
+            // not permitted. Validated here as each direct statement is parsed (no second pass).
+            if in_ts_namespace_body {
+                self.check_namespace_body_statement(&stmt);
+            }
+            if is_ambient_block
+                && !reported_ambient_statement
+                && !stmt.is_declaration()
+                && !stmt.is_module_declaration()
+            {
+                self.error(diagnostics::statement_in_ambient_context(stmt.span()));
+                reported_ambient_statement = true;
+            }
             statements.push(stmt);
         }
 
-        // M6.5.6 Phase 2.1: Check for unclosed parentheses at end of statement list
-        self.check_unclosed_parens();
-
-        (directives, statements, has_use_strict)
+        (directives, statements)
     }
 
     /// `StatementListItem`[Yield, Await, Return] :
@@ -135,6 +127,7 @@ impl<'a> ParserImpl<'a> {
     ) -> Statement<'a> {
         let has_no_side_effects_comment =
             self.lexer.trivia_builder.previous_token_has_no_side_effects_comment();
+        let pure_comment_index = self.lexer.trivia_builder.previous_token_has_pure_comment();
 
         let mut stmt = match self.cur_kind() {
             Kind::LCurly => self.parse_block_statement(),
@@ -149,9 +142,6 @@ impl<'a> ParserImpl<'a> {
             Kind::Switch => self.parse_switch_statement(),
             Kind::Throw => self.parse_throw_statement(),
             Kind::Try => self.parse_try_statement(),
-            // Orphaned catch/finally detection (error recovery)
-            Kind::Catch => self.parse_orphaned_catch_clause(),
-            Kind::Finally => self.parse_orphaned_finally_clause(),
             Kind::Debugger => self.parse_debugger_statement(),
             Kind::Class => self.parse_class_statement(
                 self.start_span(),
@@ -159,9 +149,7 @@ impl<'a> ParserImpl<'a> {
                 &Modifiers::empty(),
                 self.ast.vec(),
             ),
-            Kind::Export => {
-                self.parse_export_declaration(self.start_span(), self.ast.vec(), stmt_ctx)
-            }
+            Kind::Export => self.parse_export_declaration(self.start_span(), self.ast.vec()),
             // [+Return] ReturnStatement[?Yield, ?Await]
             Kind::Return => self.parse_return_statement(),
             Kind::Var => {
@@ -176,7 +164,7 @@ impl<'a> ParserImpl<'a> {
             Kind::At => self.parse_decorated_statement(stmt_ctx),
             Kind::Let if !self.cur_token().escaped() => self.parse_let(stmt_ctx),
             Kind::Async => self.parse_async_statement(self.start_span(), stmt_ctx),
-            Kind::Import => self.parse_import_statement(stmt_ctx),
+            Kind::Import => self.parse_import_statement(),
             Kind::Const => self.parse_const_statement(stmt_ctx),
             Kind::Using if self.is_using_declaration() => self.parse_using_statement(stmt_ctx),
             Kind::Await if self.is_using_statement() => self.parse_using_statement(stmt_ctx),
@@ -196,10 +184,18 @@ impl<'a> ParserImpl<'a> {
             | Kind::Global
                 if self.is_ts && self.at_start_of_ts_declaration() =>
             {
-                self.parse_ts_declaration_statement(self.start_span())
+                self.parse_ts_declaration_statement(self.start_span(), stmt_ctx)
             }
             _ => self.parse_expression_or_labeled_statement(),
         };
+
+        // `/* #__PURE__ */ function foo() {}` - pure comment before non-expression statements cannot be applied.
+        // Expression statements handle pure comments internally in `parse_assignment_expression_or_higher_impl`.
+        if let Some(index) = pure_comment_index
+            && !matches!(stmt, Statement::ExpressionStatement(_))
+        {
+            self.lexer.trivia_builder.mark_pure_comment_not_applied(index);
+        }
 
         if has_no_side_effects_comment {
             Self::set_pure_on_function_stmt(&mut stmt);
@@ -262,58 +258,9 @@ impl<'a> ParserImpl<'a> {
     /// Section 14.2 Block Statement
     pub(crate) fn parse_block(&mut self) -> Box<'a, BlockStatement<'a>> {
         let span = self.start_span();
-        let opening_span = self.cur_token().span();
-        self.expect(Kind::LCurly);
-
-        if self.options.recover_from_errors {
-            self.context_stack.push(ParsingContext::BlockStatements);
-        }
-
-        // Custom loop with error recovery for statement lists
-        let mut body = self.ast.vec();
-        loop {
-            let kind = self.cur_kind();
-
-            // Check termination conditions
-            if kind == Kind::RCurly
-                || matches!(kind, Kind::Eof | Kind::Undetermined)
-                || self.fatal_error.is_some()
-            {
-                break;
-            }
-
-            // Check if we can start a statement here (for error recovery)
-            if self.options.recover_from_errors
-                && !self.is_context_element_start(
-                    crate::context::ParsingContext::BlockStatements,
-                    false,
-                )
-            {
-                // Not a valid statement start - report error and synchronize
-                let error = diagnostics::expect_token(
-                    "statement",
-                    self.cur_kind().to_str(),
-                    self.cur_token().span(),
-                );
-                self.error(error);
-
-                let decision =
-                    self.synchronize_on_error(crate::context::ParsingContext::BlockStatements);
-                match decision {
-                    crate::synchronization::RecoveryDecision::Skip => continue,
-                    crate::synchronization::RecoveryDecision::Abort => break,
-                }
-            }
-
-            // Parse statement
-            body.push(self.parse_statement_list_item(StatementContext::StatementList));
-        }
-
-        if self.options.recover_from_errors {
-            self.context_stack.pop();
-        }
-
-        self.expect_closing(Kind::RCurly, opening_span);
+        let body = self.parse_normal_list(Kind::LCurly, Kind::RCurly, |p| {
+            p.parse_statement_list_item(StatementContext::StatementList)
+        });
         self.ast.alloc_block_statement(self.end_span(span), body)
     }
 
@@ -444,10 +391,9 @@ impl<'a> ParserImpl<'a> {
             Kind::Let => {
                 // `for (let`
                 let start_span = self.start_span();
-                let checkpoint = self.checkpoint();
-                self.bump_any(); // bump `let`
                 // disallow `for (let in ...`
-                if self.cur_kind().is_after_let() {
+                if self.lexer.peek_token().kind().is_after_let() {
+                    self.bump_any(); // bump `let`
                     return self.parse_variable_declaration_for_statement(
                         span,
                         start_span,
@@ -457,7 +403,6 @@ impl<'a> ParserImpl<'a> {
                     );
                 }
                 // Should be a relatively cold branch, since most tokens after `let` will be allowed in most files
-                self.rewind(checkpoint);
             }
             _ => {}
         }
@@ -495,7 +440,7 @@ impl<'a> ParserImpl<'a> {
                     p.bump_any(); // bump `of`
                     return matches!(p.cur_kind(), Kind::Eq | Kind::Semicolon | Kind::Colon);
                 }
-                kind.is_binding_identifier() || kind == Kind::LCurly
+                kind.is_binding_identifier()
             })
         {
             return self.parse_using_declaration_for_statement(
@@ -746,57 +691,24 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         self.bump_any(); // advance `switch`
         let discriminant = self.parse_paren_expression();
-
-        // Custom loop with error recovery for switch clauses
-        let opening_span = self.cur_token().span();
-        self.expect(Kind::LCurly);
-
-        if self.options.recover_from_errors {
-            self.context_stack.push(ParsingContext::SwitchClauses);
-        }
-
-        let mut cases = self.ast.vec();
-        loop {
-            let kind = self.cur_kind();
-
-            // Check termination conditions
-            if kind == Kind::RCurly
-                || matches!(kind, Kind::Eof | Kind::Undetermined)
-                || self.fatal_error.is_some()
-            {
-                break;
-            }
-
-            // Check if we can start a switch clause here (for error recovery)
-            if self.options.recover_from_errors
-                && !self
-                    .is_context_element_start(crate::context::ParsingContext::SwitchClauses, false)
-            {
-                // Not a valid switch clause start - report error and synchronize
-                let error = diagnostics::expect_token(
-                    "case or default",
-                    self.cur_kind().to_str(),
-                    self.cur_token().span(),
-                );
-                self.error(error);
-
-                let decision =
-                    self.synchronize_on_error(crate::context::ParsingContext::SwitchClauses);
-                match decision {
-                    crate::synchronization::RecoveryDecision::Skip => continue,
-                    crate::synchronization::RecoveryDecision::Abort => break,
+        // A `switch` may contain at most one `default` clause. Track the first one
+        // and report only the first duplicate, all in the single parsing pass.
+        let mut first_default: Option<Span> = None;
+        let mut reported_duplicate = false;
+        let cases = self.parse_normal_list(Kind::LCurly, Kind::RCurly, |p| {
+            let case = p.parse_switch_case();
+            if case.test.is_none() {
+                match first_default {
+                    None => first_default = Some(case.span),
+                    Some(first_span) if !reported_duplicate => {
+                        p.error(diagnostics::switch_multiple_default_clause(first_span, case.span));
+                        reported_duplicate = true;
+                    }
+                    Some(_) => {}
                 }
             }
-
-            // Parse switch case
-            cases.push(Self::parse_switch_case(self));
-        }
-
-        if self.options.recover_from_errors {
-            self.context_stack.pop();
-        }
-
-        self.expect_closing(Kind::RCurly, opening_span);
+            case
+        });
         self.ast.statement_switch(self.end_span(span), discriminant, cases)
     }
 
@@ -870,113 +782,19 @@ impl<'a> ParserImpl<'a> {
 
         let finalizer = self.eat(Kind::Finally).then(|| self.parse_block());
 
-        let handler = if handler.is_none() && finalizer.is_none() {
+        if handler.is_none() && finalizer.is_none() {
             let range = Span::empty(block.span.end);
             self.error(diagnostics::expect_catch_finally(range));
-
-            // Error recovery: create dummy catch clause to allow parsing to continue
-            if self.options.recover_from_errors {
-                Some(self.create_dummy_catch_clause(range))
-            } else {
-                None
-            }
-        } else {
-            handler
-        };
+        }
 
         self.ast.statement_try(self.end_span(span), block, handler, finalizer)
-    }
-
-    /// Parse orphaned catch clause (catch without try) for error recovery
-    fn parse_orphaned_catch_clause(&mut self) -> Statement<'a> {
-        let span = self.start_span();
-
-        // Report error for orphaned catch
-        self.error(diagnostics::catch_without_try(self.cur_token().span()));
-
-        // Try to parse the catch clause anyway for better recovery
-        if self.options.recover_from_errors {
-            // Skip the catch keyword and its block to continue parsing
-            self.bump_any(); // bump 'catch'
-
-            // Skip optional parameter parentheses
-            if self.at(Kind::LParen) {
-                self.bump_any();
-                // Skip until closing paren
-                while !self.at(Kind::RParen) && !self.at(Kind::Eof) {
-                    self.bump_any();
-                }
-                if self.at(Kind::RParen) {
-                    self.bump_any();
-                }
-            }
-
-            // Skip the catch block
-            if self.at(Kind::LCurly) {
-                let _ = self.parse_block();
-            }
-
-            // Return an empty statement to continue parsing
-            self.ast.statement_empty(self.end_span(span))
-        } else {
-            self.unexpected()
-        }
-    }
-
-    /// Parse orphaned finally clause (finally without try) for error recovery
-    fn parse_orphaned_finally_clause(&mut self) -> Statement<'a> {
-        let span = self.start_span();
-
-        // Report error for orphaned finally
-        self.error(diagnostics::finally_without_try(self.cur_token().span()));
-
-        // Try to parse the finally clause anyway for better recovery
-        if self.options.recover_from_errors {
-            // Skip the finally keyword and its block to continue parsing
-            self.bump_any(); // bump 'finally'
-
-            // Skip the finally block
-            if self.at(Kind::LCurly) {
-                let _ = self.parse_block();
-            }
-
-            // Return an empty statement to continue parsing
-            self.ast.statement_empty(self.end_span(span))
-        } else {
-            self.unexpected()
-        }
     }
 
     fn parse_catch_clause(&mut self) -> Box<'a, CatchClause<'a>> {
         let span = self.start_span();
         self.bump_any(); // advance `catch`
         let pattern = if self.eat(Kind::LParen) {
-            let param_span = self.start_span();
-            // Try to parse binding pattern, use dummy on error
-            let (pattern, type_annotation) = if self.options.recover_from_errors {
-                // Check for invalid catch parameter (e.g., numeric literals, etc.)
-                if !matches!(
-                    self.cur_kind(),
-                    Kind::Ident | Kind::LCurly | Kind::LBrack | Kind::RParen
-                ) {
-                    // Invalid catch parameter - create error and dummy parameter
-                    self.error(diagnostics::expect_catch_parameter(self.cur_token().span()));
-                    // Skip invalid tokens until we find RParen or valid pattern start
-                    while !self.at(Kind::RParen) && !self.at(Kind::Eof) {
-                        self.bump_any();
-                    }
-                    let dummy_pattern =
-                        self.create_dummy_catch_parameter(self.end_span(param_span)).pattern;
-                    (dummy_pattern, None)
-                } else if self.at(Kind::RParen) {
-                    // Empty catch parameter (ES2019+ optional binding is valid)
-                    (self.parse_binding_pattern_with_type_annotation().0, None)
-                } else {
-                    self.parse_binding_pattern_with_type_annotation()
-                }
-            } else {
-                self.parse_binding_pattern_with_type_annotation()
-            };
+            let (pattern, type_annotation) = self.parse_binding_pattern_with_type_annotation();
             self.expect(Kind::RParen);
             Some((pattern, type_annotation))
         } else {
@@ -1009,8 +827,7 @@ impl<'a> ParserImpl<'a> {
         let span = self.start_span();
         self.bump_any();
         if self.is_ts && self.at(Kind::Enum) {
-            let modifiers = self.ast.vec1(Modifier::new(self.end_span(span), ModifierKind::Const));
-            let modifiers = Modifiers::new(Some(modifiers), ModifierFlags::CONST);
+            let modifiers = Modifiers::new_single(ModifierKind::Const, span);
             Statement::from(self.parse_ts_enum_declaration(span, &modifiers))
         } else {
             self.parse_variable_statement(span, VariableDeclarationKind::Const, stmt_ctx)
@@ -1018,30 +835,26 @@ impl<'a> ParserImpl<'a> {
     }
 
     /// Parse import statement or import expression.
-    fn parse_import_statement(&mut self, stmt_ctx: StatementContext) -> Statement<'a> {
-        let checkpoint = self.checkpoint();
+    fn parse_import_statement(&mut self) -> Statement<'a> {
         let span = self.start_span();
-        self.bump_any();
-        if matches!(self.cur_kind(), Kind::Dot | Kind::LParen) {
-            // Parse the whole expression `import.meta.url` so a rewind is required.
-            self.rewind(checkpoint);
+        if matches!(self.lexer.peek_token().kind(), Kind::Dot | Kind::LParen) {
+            // Parse the whole expression `import.meta.url`.
             self.parse_expression_or_labeled_statement()
         } else {
-            self.parse_import_declaration(span, stmt_ctx.is_top_level())
+            self.bump_any(); // bump `import`
+            self.parse_import_declaration(span, self.ctx.has_top_level())
         }
     }
 
     /// Parse statements that start with `sync`.
     fn parse_async_statement(&mut self, span: u32, stmt_ctx: StatementContext) -> Statement<'a> {
-        let checkpoint = self.checkpoint();
-        self.bump_any(); // bump `async`
-        let token = self.cur_token();
+        let token = self.lexer.peek_token();
         if token.kind() == Kind::Function && !token.is_on_new_line() {
+            self.bump_any(); // bump `async`
             return self.parse_function_declaration(span, /* async */ true, stmt_ctx);
         }
-        self.rewind(checkpoint);
         if self.is_ts && self.at_start_of_ts_declaration() {
-            return self.parse_ts_declaration_statement(span);
+            return self.parse_ts_declaration_statement(span, stmt_ctx);
         }
         self.parse_expression_or_labeled_statement()
     }
@@ -1053,7 +866,7 @@ impl<'a> ParserImpl<'a> {
         let kind = self.cur_kind();
         if kind == Kind::Export {
             // Export span.start starts after decorators.
-            return self.parse_export_declaration(self.start_span(), decorators, stmt_ctx);
+            return self.parse_export_declaration(self.start_span(), decorators);
         }
         let modifiers = self.parse_modifiers(false, false);
         if self.at(Kind::Class) {
@@ -1061,23 +874,5 @@ impl<'a> ParserImpl<'a> {
             return self.parse_class_statement(span, stmt_ctx, &modifiers, decorators);
         }
         self.unexpected()
-    }
-
-    /// Helper function to create a dummy empty catch clause for error recovery.
-    /// Used when a try statement is missing both catch and finally clauses.
-    #[expect(clippy::needless_pass_by_ref_mut, reason = "AST builder requires mutable access")]
-    fn create_dummy_catch_clause(&mut self, span: Span) -> Box<'a, CatchClause<'a>> {
-        let body = self.ast.block_statement(span, self.ast.vec());
-        self.ast.alloc_catch_clause(span, None, body)
-    }
-
-    /// Helper function to create a dummy catch parameter for error recovery.
-    /// Creates a simple identifier pattern named "e" when catch parameter parsing fails.
-    #[expect(clippy::needless_pass_by_ref_mut, reason = "AST builder requires mutable access")]
-    fn create_dummy_catch_parameter(&mut self, span: Span) -> CatchParameter<'a> {
-        let binding_identifier = self.ast.alloc(self.ast.binding_identifier(span, Atom::from("e")));
-        let pattern = BindingPattern::BindingIdentifier(binding_identifier);
-        let type_annotation: Option<Box<TSTypeAnnotation>> = None;
-        self.ast.catch_parameter(span, pattern, type_annotation)
     }
 }

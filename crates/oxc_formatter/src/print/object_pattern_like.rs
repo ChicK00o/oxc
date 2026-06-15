@@ -4,7 +4,7 @@ use oxc_span::GetSpan;
 use crate::{
     ast_nodes::{AstNode, AstNodes},
     formatter::{
-        Buffer, Format, Formatter,
+        Buffer, Format, JsFormatContext, JsFormatter,
         prelude::{format_with, group, soft_block_indent_with_maybe_space},
         trivia::format_dangling_comments,
     },
@@ -38,12 +38,12 @@ impl<'a> ObjectPatternLike<'a, '_> {
         }
     }
 
-    fn is_inline(&self, _f: &Formatter<'_, 'a>) -> bool {
+    fn is_inline(&self, _f: &JsFormatter<'_, 'a>) -> bool {
         match self {
-            Self::ObjectPattern(node) => match node.parent {
+            Self::ObjectPattern(node) => match node.parent() {
                 AstNodes::FormalParameter(_) => true,
                 AstNodes::AssignmentPattern(_) => {
-                    matches!(node.parent.parent(), AstNodes::FormalParameter(_))
+                    matches!(node.grand_parent(), AstNodes::FormalParameter(_))
                 }
                 _ => false,
             },
@@ -56,7 +56,7 @@ impl<'a> ObjectPatternLike<'a, '_> {
         match self {
             Self::ObjectPattern(node) => {
                 let parent_is_parameter_or_assignment_pattern = matches!(
-                    node.parent,
+                    node.parent(),
                     AstNodes::CatchParameter(_)
                         | AstNodes::FormalParameter(_)
                         | AstNodes::AssignmentPattern(_)
@@ -90,15 +90,15 @@ impl<'a> ObjectPatternLike<'a, '_> {
 
     fn is_in_assignment_like(&self) -> bool {
         match self {
-            Self::ObjectPattern(node) => matches!(node.parent, AstNodes::VariableDeclarator(_)),
+            Self::ObjectPattern(node) => matches!(node.parent(), AstNodes::VariableDeclarator(_)),
             Self::ObjectAssignmentTarget(node) => matches!(
-                node.parent,
+                node.parent(),
                 AstNodes::AssignmentExpression(_) | AstNodes::VariableDeclarator(_)
             ),
         }
     }
 
-    fn layout(&self, f: &Formatter<'_, 'a>) -> ObjectPatternLayout {
+    fn layout(&self, f: &JsFormatter<'_, 'a>) -> ObjectPatternLayout {
         if self.is_empty() {
             return ObjectPatternLayout::Empty;
         }
@@ -118,7 +118,7 @@ impl<'a> ObjectPatternLike<'a, '_> {
         }
     }
 
-    fn write_properties(&self, f: &mut Formatter<'_, 'a>) {
+    fn write_properties(&self, f: &mut JsFormatter<'_, 'a>) {
         match self {
             Self::ObjectPattern(o) => BindingPropertyList::new(o.properties(), o.rest()).fmt(f),
             Self::ObjectAssignmentTarget(o) => {
@@ -128,8 +128,8 @@ impl<'a> ObjectPatternLike<'a, '_> {
     }
 }
 
-impl<'a> Format<'a> for ObjectPatternLike<'a, '_> {
-    fn fmt(&self, f: &mut Formatter<'_, 'a>) {
+impl<'a> Format<'a, JsFormatContext<'a>> for ObjectPatternLike<'a, '_> {
+    fn fmt(&self, f: &mut JsFormatter<'_, 'a>) {
         let should_insert_space_around_brackets = f.options().bracket_spacing.value();
         let format_properties = format_with(|f| {
             write!(

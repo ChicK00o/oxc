@@ -3,7 +3,6 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_semantic::NodeId;
 use oxc_span::Span;
-use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::{
@@ -11,7 +10,7 @@ use crate::{
     ast_util::get_outer_member_expression,
     context::LintContext,
     rule::{DefaultRuleConfig, Rule},
-    utils::{is_es6_component, is_state_member_expression},
+    utils::{AlwaysNever, is_es6_component, is_state_member_expression},
 };
 
 fn state_in_constructor_diagnostic(span: Span, is_state_init_constructor: bool) -> OxcDiagnostic {
@@ -23,41 +22,27 @@ fn state_in_constructor_diagnostic(span: Span, is_state_init_constructor: bool) 
     OxcDiagnostic::warn(message).with_label(span)
 }
 
-#[derive(Debug, Default, Clone, JsonSchema, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum StateInConstructorConfig {
-    /// Enforce state initialization in the constructor.
-    #[default]
-    Always,
-    /// Enforce state initialization with a class property.
-    Never,
-}
-
-impl StateInConstructorConfig {
+impl StateInConstructor {
     pub const fn is_always(&self) -> bool {
-        matches!(self, Self::Always)
+        matches!(*self.0, AlwaysNever::Always)
     }
 
     pub const fn is_never(&self) -> bool {
-        matches!(self, Self::Never)
+        matches!(*self.0, AlwaysNever::Never)
     }
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-pub struct StateInConstructor(Box<StateInConstructorConfig>);
-
-impl std::ops::Deref for StateInConstructor {
-    type Target = StateInConstructorConfig;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
+pub struct StateInConstructor(Box<AlwaysNever>);
 
 declare_oxc_lint!(
     /// ### What it does
     ///
-    /// Enforces the state initialization style to be either in a constructor or with a class property.
+    /// Enforces the state initialization style to be either in a
+    /// constructor or with a class property.
+    ///
+    /// This rule is not relevant for function components, and so can potentially be
+    /// disabled for modern React codebases.
     ///
     /// ### Why is this bad?
     ///
@@ -66,13 +51,7 @@ declare_oxc_lint!(
     ///
     /// ### Examples
     ///
-    /// This rule has two modes: `"always"` and `"never"`.
-    ///
-    /// #### `"always"` mode
-    ///
-    /// Will enforce the state initialization style to be in a constructor. This is the default mode.
-    ///
-    /// Examples of **incorrect** code for this rule:
+    /// Examples of **incorrect** code for this rule by default, with `"always"` mode:
     /// ```jsx
     /// class Foo extends React.Component {
     ///   state = { bar: 0 }
@@ -82,7 +61,7 @@ declare_oxc_lint!(
     /// }
     /// ```
     ///
-    /// Examples of **correct** code for this rule:
+    /// Examples of **correct** code for this rule by default, with `"always"` mode:
     /// ```jsx
     /// class Foo extends React.Component {
     ///   constructor(props) {
@@ -99,7 +78,7 @@ declare_oxc_lint!(
     ///
     /// Will enforce the state initialization style to be with a class property.
     ///
-    /// Examples of **incorrect** code for this rule:
+    /// Examples of **incorrect** code for this rule with `"never"` mode:
     /// ```jsx
     /// class Foo extends React.Component {
     ///   constructor(props) {
@@ -112,7 +91,7 @@ declare_oxc_lint!(
     /// }
     /// ```
     ///
-    /// Examples of **correct** code for this rule:
+    /// Examples of **correct** code for this rule with `"never"` mode:
     /// ```jsx
     /// class Foo extends React.Component {
     ///   state = { bar: 0 }
@@ -124,7 +103,9 @@ declare_oxc_lint!(
     StateInConstructor,
     react,
     style,
-    config = StateInConstructorConfig,
+    config = AlwaysNever,
+    version = "1.26.0",
+    short_description = "Enforce a consistent style for initializing class component state.",
 );
 
 impl Rule for StateInConstructor {
@@ -134,14 +115,13 @@ impl Rule for StateInConstructor {
 
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
         match node.kind() {
-            AstKind::PropertyDefinition(prop_def) => {
+            AstKind::PropertyDefinition(prop_def)
                 if self.is_always()
                     && !prop_def.r#static
                     && prop_def.key.name().is_some_and(|name| name == "state")
-                    && has_parent_es6_component(node, ctx)
-                {
-                    ctx.diagnostic(state_in_constructor_diagnostic(prop_def.span, true));
-                }
+                    && has_parent_es6_component(node, ctx) =>
+            {
+                ctx.diagnostic(state_in_constructor_diagnostic(prop_def.span, true));
             }
             AstKind::AssignmentExpression(assign_expr) => {
                 if self.is_never()
@@ -180,225 +160,225 @@ fn test() {
     let pass = vec![
         (
             "
-			        class Foo extends React.Component {
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.state = { bar: 0 }
-			          }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.state = { bar: 0 }
+                      }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.state = { bar: 0 }
-			          }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.state = { bar: 0 }
+                      }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["always"])),
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.state = { bar: 0 }
-			          }
-			          baz = { bar: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.state = { bar: 0 }
+                      }
+                      baz = { bar: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.baz = { bar: 0 }
-			          }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.baz = { bar: 0 }
+                      }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.baz = { bar: 0 }
-			          }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.baz = { bar: 0 }
+                      }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        class Foo extends React.Component {
-			          baz = { bar: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      baz = { bar: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          baz = { bar: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      baz = { bar: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        const Foo = () => <div>Foo</div>
-			      ",
+                    const Foo = () => <div>Foo</div>
+                  ",
             None,
         ),
         (
             "
-			        const Foo = () => <div>Foo</div>
-			      ",
+                    const Foo = () => <div>Foo</div>
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        function Foo () {
-			          return <div>Foo</div>
-			        }
-			      ",
+                    function Foo () {
+                      return <div>Foo</div>
+                    }
+                  ",
             None,
         ),
         (
             "
-			        function Foo () {
-			          return <div>Foo</div>
-			        }
-			      ",
+                    function Foo () {
+                      return <div>Foo</div>
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        class Foo extends React.Component {
-			          state = { bar: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      state = { bar: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        class Foo extends React.Component {
-			          state = { bar: 0 }
-			          baz = { bar: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      state = { bar: 0 }
+                      baz = { bar: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.baz = { bar: 0 }
-			          }
-			          state = { baz: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.baz = { bar: 0 }
+                      }
+                      state = { baz: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            if (foobar) {
-			              this.state = { bar: 0 }
-			            }
-			          }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        if (foobar) {
+                          this.state = { bar: 0 }
+                        }
+                      }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            foobar = { bar: 0 }
-			          }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        foobar = { bar: 0 }
+                      }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            foobar = { bar: 0 }
-			          }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        foobar = { bar: 0 }
+                      }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
     ];
@@ -406,115 +386,115 @@ fn test() {
     let fail = vec![
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.state = { bar: 0 }
-			          }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.state = { bar: 0 }
+                      }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.state = { bar: 0 }
-			          }
-			          baz = { bar: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.state = { bar: 0 }
+                      }
+                      baz = { bar: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        class Foo extends React.Component {
-			          state = { bar: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      state = { bar: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          state = { bar: 0 }
-			          baz = { bar: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      state = { bar: 0 }
+                      baz = { bar: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.baz = { bar: 0 }
-			          }
-			          state = { baz: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.baz = { bar: 0 }
+                      }
+                      state = { baz: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.state = { bar: 0 }
-			          }
-			          state = { baz: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.state = { bar: 0 }
+                      }
+                      state = { baz: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             None,
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            this.state = { bar: 0 }
-			          }
-			          state = { baz: 0 }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        this.state = { bar: 0 }
+                      }
+                      state = { baz: 0 }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
             "
-			        class Foo extends React.Component {
-			          constructor(props) {
-			            super(props)
-			            if (foobar) {
-			              this.state = { bar: 0 }
-			            }
-			          }
-			          render() {
-			            return <div>Foo</div>
-			          }
-			        }
-			      ",
+                    class Foo extends React.Component {
+                      constructor(props) {
+                        super(props)
+                        if (foobar) {
+                          this.state = { bar: 0 }
+                        }
+                      }
+                      render() {
+                        return <div>Foo</div>
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["never"])),
         ),
         (
@@ -530,7 +510,7 @@ fn test() {
                       helper();
                   }
               }
-			      ",
+                  ",
             Some(serde_json::json!(["never"])),
         ),
     ];

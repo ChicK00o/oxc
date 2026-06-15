@@ -2,6 +2,7 @@ use oxc_ast::AstKind;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
+use oxc_str::static_ident;
 
 use crate::{
     AstNode,
@@ -53,7 +54,9 @@ declare_oxc_lint!(
     /// ```
     ReactInJsxScope,
     react,
-    suspicious
+    suspicious,
+    version = "0.0.20",
+    short_description = "Enforce that React is in scope when using JSX.",
 );
 
 impl Rule for ReactInJsxScope {
@@ -64,12 +67,11 @@ impl Rule for ReactInJsxScope {
             _ => return,
         };
         let scope = ctx.scoping();
-        let react_name = "React";
-        if scope.get_binding(scope.root_scope_id(), react_name).is_some() {
+        if scope.get_binding(scope.root_scope_id(), static_ident!("React")).is_some() {
             return;
         }
 
-        if scope.find_binding(node.scope_id(), react_name).is_none() {
+        if scope.find_binding(node.scope_id(), static_ident!("React")).is_none() {
             ctx.diagnostic(react_in_jsx_scope_diagnostic(node_span));
         }
     }

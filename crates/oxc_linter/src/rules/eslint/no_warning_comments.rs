@@ -4,6 +4,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::Span;
 use rustc_hash::FxHashSet;
+use schemars::JsonSchema;
 
 use crate::{context::LintContext, rule::Rule};
 
@@ -41,7 +42,17 @@ struct NoWarningCommentsConfig {
     patterns: Vec<Regex>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[expect(unused)] // only for schema generation
+struct NoWarningCommentsConfigJson {
+    terms: Option<Vec<String>>,
+    location: Option<Location>,
+    decoration: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
 enum Location {
     Start,
     Anywhere,
@@ -122,7 +133,10 @@ declare_oxc_lint!(
     /// Useful for ignoring common comment decorations like `*` in JSDoc-style comments.
     NoWarningComments,
     eslint,
-    pedantic
+    pedantic,
+    config = NoWarningCommentsConfigJson,
+    version = "1.24.0",
+    short_description = "Disallows warning comments such as TODO, FIXME, XXX in code.",
 );
 
 impl Rule for NoWarningComments {

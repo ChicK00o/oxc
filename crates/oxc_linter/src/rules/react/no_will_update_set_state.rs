@@ -2,15 +2,15 @@ use oxc_ast::{AstKind, ast::Expression};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::{
     AstNode,
     config::ReactVersion,
     context::LintContext,
     rule::{DefaultRuleConfig, Rule},
-    utils::{is_es5_component, is_es6_component},
+    rules::ContextHost,
+    utils::{AllowedOrDisallowInFunc, is_es5_component, is_es6_component},
 };
 
 fn no_will_update_set_state_diagnostic(span: Span) -> OxcDiagnostic {
@@ -19,17 +19,8 @@ fn no_will_update_set_state_diagnostic(span: Span) -> OxcDiagnostic {
         .with_label(span)
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum NoWillUpdateSetStateConfig {
-    #[default]
-    #[serde(skip)]
-    Allowed,
-    DisallowInFunc,
-}
-
 #[derive(Debug, Default, Clone, Deserialize)]
-pub struct NoWillUpdateSetState(NoWillUpdateSetStateConfig);
+pub struct NoWillUpdateSetState(AllowedOrDisallowInFunc);
 
 declare_oxc_lint!(
     /// ### What it does
@@ -71,7 +62,9 @@ declare_oxc_lint!(
     NoWillUpdateSetState,
     react,
     correctness,
-    config = NoWillUpdateSetStateConfig,
+    config = AllowedOrDisallowInFunc,
+    version = "1.37.0",
+    short_description = "Disallows using `setState` in the `componentWillUpdate` lifecycle method.",
 );
 
 impl Rule for NoWillUpdateSetState {
@@ -153,11 +146,15 @@ impl Rule for NoWillUpdateSetState {
 
         let in_nested_function = function_count > 1;
 
-        if in_nested_function && !matches!(self.0, NoWillUpdateSetStateConfig::DisallowInFunc) {
+        if in_nested_function && !matches!(self.0, AllowedOrDisallowInFunc::DisallowInFunc) {
             return;
         }
 
         ctx.diagnostic(no_will_update_set_state_diagnostic(call_expr.callee.span()));
+    }
+
+    fn should_run(&self, ctx: &ContextHost) -> bool {
+        ctx.source_type().is_jsx()
     }
 }
 
@@ -168,94 +165,94 @@ fn test() {
     let pass = vec![
         (
             "
-			        var Hello = createReactClass({
-			          render: function() {
-			            return <div>Hello {this.props.name}</div>;
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      render: function() {
+                        return <div>Hello {this.props.name}</div>;
+                      }
+                    });
+                  ",
             None,
             None,
         ),
         (
             "
-			        var Hello = createReactClass({
-			          componentWillUpdate: function() {}
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      componentWillUpdate: function() {}
+                    });
+                  ",
             None,
             None,
         ),
         (
             "
-			        var Hello = createReactClass({
-			          componentWillUpdate: function() {
-			            someNonMemberFunction(arg);
-			            this.someHandler = this.setState;
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      componentWillUpdate: function() {
+                        someNonMemberFunction(arg);
+                        this.someHandler = this.setState;
+                      }
+                    });
+                  ",
             None,
             None,
         ),
         (
             "
-			        var Hello = createReactClass({
-			          componentWillUpdate: function() {
-			            someClass.onSomeEvent(function(data) {
-			              this.setState({
-			                data: data
-			              });
-			            })
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      componentWillUpdate: function() {
+                        someClass.onSomeEvent(function(data) {
+                          this.setState({
+                            data: data
+                          });
+                        })
+                      }
+                    });
+                  ",
             None,
             None,
         ),
         (
             "
-			        var Hello = createReactClass({
-			          componentWillUpdate: function() {
-			            function handleEvent(data) {
-			              this.setState({
-			                data: data
-			              });
-			            }
-			            someClass.onSomeEvent(handleEvent)
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      componentWillUpdate: function() {
+                        function handleEvent(data) {
+                          this.setState({
+                            data: data
+                          });
+                        }
+                        someClass.onSomeEvent(handleEvent)
+                      }
+                    });
+                  ",
             None,
             None,
         ),
         (
             "
-			        class Hello extends React.Component {
-			          UNSAFE_componentWillUpdate() {
-			            this.setState({
-			              data: data
-			            });
-			          }
-			        }
-			      ",
+                    class Hello extends React.Component {
+                      UNSAFE_componentWillUpdate() {
+                        this.setState({
+                          data: data
+                        });
+                      }
+                    }
+                  ",
             None,
             Some(serde_json::json!({ "settings": { "react": { "version": "16.2.0" } } })),
         ),
         // Test to ensure that not providing a value for the config works fine and does not error.
         (
             "
-			        var Hello = createReactClass({
-			          componentWillUpdate: function() {
-			            function handleEvent(data) {
-			              this.setState({
-			                data: data
-			              });
-			            }
-			            someClass.onSomeEvent(handleEvent)
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      componentWillUpdate: function() {
+                        function handleEvent(data) {
+                          this.setState({
+                            data: data
+                          });
+                        }
+                        someClass.onSomeEvent(handleEvent)
+                      }
+                    });
+                  ",
             Some(serde_json::json!([])),
             None,
         ),
@@ -264,161 +261,161 @@ fn test() {
     let fail = vec![
         (
             "
-			        var Hello = createReactClass({
-			          componentWillUpdate: function() {
-			            this.setState({
-			              data: data
-			            });
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      componentWillUpdate: function() {
+                        this.setState({
+                          data: data
+                        });
+                      }
+                    });
+                  ",
             None,
             None,
         ),
         (
             "
-			        class Hello extends React.Component {
-			          componentWillUpdate() {
-			            this.setState({
-			              data: data
-			            });
-			          }
-			        }
-			      ",
+                    class Hello extends React.Component {
+                      componentWillUpdate() {
+                        this.setState({
+                          data: data
+                        });
+                      }
+                    }
+                  ",
             None,
             None,
         ),
         (
             "
-			        var Hello = createReactClass({
-			          componentWillUpdate: function() {
-			            this.setState({
-			              data: data
-			            });
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      componentWillUpdate: function() {
+                        this.setState({
+                          data: data
+                        });
+                      }
+                    });
+                  ",
             Some(serde_json::json!(["disallow-in-func"])),
             None,
         ),
         (
             "
-			        class Hello extends React.Component {
-			          componentWillUpdate() {
-			            this.setState({
-			              data: data
-			            });
-			          }
-			        }
-			      ",
+                    class Hello extends React.Component {
+                      componentWillUpdate() {
+                        this.setState({
+                          data: data
+                        });
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["disallow-in-func"])),
             None,
         ),
         (
             "
-			        var Hello = createReactClass({
-			          componentWillUpdate: function() {
-			            someClass.onSomeEvent(function(data) {
-			              this.setState({
-			                data: data
-			              });
-			            })
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      componentWillUpdate: function() {
+                        someClass.onSomeEvent(function(data) {
+                          this.setState({
+                            data: data
+                          });
+                        })
+                      }
+                    });
+                  ",
             Some(serde_json::json!(["disallow-in-func"])),
             None,
         ),
         (
             "
-			        class Hello extends React.Component {
-			          componentWillUpdate() {
-			            someClass.onSomeEvent(function(data) {
-			              this.setState({
-			                data: data
-			              });
-			            })
-			          }
-			        }
-			      ",
+                    class Hello extends React.Component {
+                      componentWillUpdate() {
+                        someClass.onSomeEvent(function(data) {
+                          this.setState({
+                            data: data
+                          });
+                        })
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["disallow-in-func"])),
             None,
         ),
         (
             "
-			        var Hello = createReactClass({
-			          componentWillUpdate: function() {
-			            if (true) {
-			              this.setState({
-			                data: data
-			              });
-			            }
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      componentWillUpdate: function() {
+                        if (true) {
+                          this.setState({
+                            data: data
+                          });
+                        }
+                      }
+                    });
+                  ",
             None,
             None,
         ),
         (
             "
-			        class Hello extends React.Component {
-			          componentWillUpdate() {
-			            if (true) {
-			              this.setState({
-			                data: data
-			              });
-			            }
-			          }
-			        }
-			      ",
+                    class Hello extends React.Component {
+                      componentWillUpdate() {
+                        if (true) {
+                          this.setState({
+                            data: data
+                          });
+                        }
+                      }
+                    }
+                  ",
             None,
             None,
         ),
         (
             "
-			        var Hello = createReactClass({
-			          componentWillUpdate: function() {
-			            someClass.onSomeEvent((data) => this.setState({data: data}));
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      componentWillUpdate: function() {
+                        someClass.onSomeEvent((data) => this.setState({data: data}));
+                      }
+                    });
+                  ",
             Some(serde_json::json!(["disallow-in-func"])),
             None,
         ),
         (
             "
-			        class Hello extends React.Component {
-			          componentWillUpdate() {
-			            someClass.onSomeEvent((data) => this.setState({data: data}));
-			          }
-			        }
-			      ",
+                    class Hello extends React.Component {
+                      componentWillUpdate() {
+                        someClass.onSomeEvent((data) => this.setState({data: data}));
+                      }
+                    }
+                  ",
             Some(serde_json::json!(["disallow-in-func"])),
             None,
         ),
         (
             "
-			        class Hello extends React.Component {
-			          UNSAFE_componentWillUpdate() {
-			            this.setState({
-			              data: data
-			            });
-			          }
-			        }
-			      ",
+                    class Hello extends React.Component {
+                      UNSAFE_componentWillUpdate() {
+                        this.setState({
+                          data: data
+                        });
+                      }
+                    }
+                  ",
             None,
             Some(serde_json::json!({ "settings": { "react": { "version": "16.3.0" } } })),
         ),
         (
             "
-			        var Hello = createReactClass({
-			          UNSAFE_componentWillUpdate: function() {
-			            this.setState({
-			              data: data
-			            });
-			          }
-			        });
-			      ",
+                    var Hello = createReactClass({
+                      UNSAFE_componentWillUpdate: function() {
+                        this.setState({
+                          data: data
+                        });
+                      }
+                    });
+                  ",
             None,
             Some(serde_json::json!({ "settings": { "react": { "version": "16.3.0" } } })),
         ),

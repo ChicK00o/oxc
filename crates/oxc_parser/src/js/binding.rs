@@ -2,9 +2,9 @@ use oxc_allocator::Box;
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
 
-use crate::{Context, ParserImpl, diagnostics, lexer::Kind};
+use crate::{Context, ParserConfig as Config, ParserImpl, diagnostics, lexer::Kind};
 
-impl<'a> ParserImpl<'a> {
+impl<'a, C: Config> ParserImpl<'a, C> {
     /// `BindingElement`
     ///     `SingleNameBinding`
     ///     `BindingPattern`[?Yield, ?Await] `Initializer`[+In, ?Yield, ?Await]opt
@@ -159,12 +159,12 @@ impl<'a> ParserImpl<'a> {
         // For formal parameters, type annotation is NOT consumed here
         // It will be parsed by the caller (parse_formal_parameters_list) and attached to FormalParameterRest
 
-        // Rest element does not allow `= initializer`
-        // function foo([...x = []]) { }
-        //                    ^^^^ A rest element cannot have an initializer
+        // Rest parameter does not allow `= initializer`
+        // function foo(...x = []) { }
+        //                 ^^^^^^ A rest parameter cannot have an initializer
         let argument = self.context_add(Context::In, |p| p.parse_initializer(init_span, pattern));
         if let BindingPattern::AssignmentPattern(pat) = &argument {
-            self.error(diagnostics::a_rest_element_cannot_have_an_initializer(pat.span));
+            self.error(diagnostics::a_rest_parameter_cannot_have_an_initializer(pat.span));
         }
 
         self.ast.binding_rest_element(self.end_span(span), argument)

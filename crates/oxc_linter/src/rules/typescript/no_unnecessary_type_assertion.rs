@@ -66,8 +66,10 @@ declare_oxc_lint!(
     NoUnnecessaryTypeAssertion(tsgolint),
     typescript,
     suspicious,
-    pending,
+    fix,
     config = NoUnnecessaryTypeAssertionConfig,
+    version = "1.12.0",
+    short_description = "This rule disallows type assertions that do not change the type of an expression.",
 );
 
 impl Rule for NoUnnecessaryTypeAssertion {

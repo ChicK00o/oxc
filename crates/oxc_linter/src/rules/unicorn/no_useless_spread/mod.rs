@@ -142,7 +142,9 @@ declare_oxc_lint!(
     NoUselessSpread,
     unicorn,
     correctness,
-    fix_dangerous
+    fix_dangerous,
+    version = "0.0.19",
+    short_description = "Disallow unnecessary spread.",
 );
 
 impl Rule for NoUselessSpread {
@@ -319,7 +321,7 @@ fn check_useless_iterable_to_array<'a>(
         return false;
     };
 
-    let span = Span::new(spread_elem.span.start, spread_elem.span.start + 3);
+    let span = Span::sized(spread_elem.span.start, 3);
 
     match parent.kind() {
         AstKind::ForOfStatement(for_of_stmt) => {
@@ -395,7 +397,7 @@ fn check_useless_clone<'a>(
     spread_elem: &SpreadElement<'a>,
     ctx: &LintContext<'a>,
 ) {
-    let span = Span::new(spread_elem.span.start, spread_elem.span.start + 3);
+    let span = Span::sized(spread_elem.span.start, 3);
     let target = spread_elem.argument.get_inner_expression();
 
     // already diagnosed by first check
@@ -765,7 +767,6 @@ fn test() {
         (r"[...await Promise.all(foo)]", r"await Promise.all(foo)"),
         (r"[...Array.from(iterable)]", r"Array.from(iterable)"),
         ("[...((0, []))]", "((0, []))"),
-        ("[...arr.reduce((a, b) => a.push(b), [])]", "arr.reduce((a, b) => a.push(b), [])"),
         ("[...arr.reduce((a, b) => a.push(b), [])]", "arr.reduce((a, b) => a.push(b), [])"),
         // Issue: <https://github.com/oxc-project/oxc/issues/8115>
         ("setupServer(...[...importHandlers])", "setupServer(...importHandlers)"),

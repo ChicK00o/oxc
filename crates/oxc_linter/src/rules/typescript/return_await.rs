@@ -99,8 +99,10 @@ declare_oxc_lint!(
     ReturnAwait(tsgolint),
     typescript,
     pedantic,
-    pending,
+    fix_suggestion,
     config = ReturnAwaitOption,
+    version = "1.12.0",
+    short_description = "This rule enforces consistent returning of awaited values from async functions.",
 );
 
 impl Rule for ReturnAwait {

@@ -33,9 +33,9 @@ Arguments:
 /// `print_rules`
 ///
 /// `cargo run -p website linter-rules
-///   --rules-json /path/to/oxc/oxc-project.github.io/.vitepress/data/rules.json
-///   --rule-docs /path/to/oxc/oxc-project.github.io/src/docs/guide/usage/linter/rules
-///   --rule-count /path/to/oxc/oxc-project.github.io/src/docs/guide/usage
+///   --rules-json /path/to/oxc/website/.vitepress/data/rules.json
+///   --rule-docs /path/to/oxc/website/src/docs/guide/usage/linter/rules
+///   --rule-count /path/to/oxc/website/src/docs/guide/usage
 ///   --git-ref dc9dc03872101c15b0d02f05ce45705565665829
 /// `
 /// <https://oxc.rs/docs/guide/usage/linter/rules.html>
@@ -143,12 +143,16 @@ mod tests {
                 "eslint/no-unused-vars"
                 | "import/namespace"
                 | "jest/expect-expect"
+                | "jest/require-top-level-describe"
                 | "jsdoc/require-returns"
                 | "jsx-a11y/aria-role"
                 | "nextjs/no-duplicate-head"
                 | "oxc/no-barrel-file"
                 | "promise/no-callback-in-promise"
+                | "react/forbid-dom-props"
+                | "react/no-will-update-set-state"
                 | "react/rules-of-hooks"
+                | "typescript/class-literal-property-style"
                 | "typescript/no-floating-promises"
                 | "typescript/no-explicit-any"
                 | "unicorn/prefer-array-find"

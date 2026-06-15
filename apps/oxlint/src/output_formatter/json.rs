@@ -1,7 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
+use oxc_str::CompactStr;
+
 use miette::JSONReportHandler;
-use oxc_span::CompactStr;
 use rustc_hash::FxHashSet;
 use serde::Serialize;
 
@@ -19,12 +20,14 @@ pub struct JsonOutputFormatter {
 }
 
 impl InternalFormatter for JsonOutputFormatter {
-    fn all_rules(&self) -> Option<String> {
+    fn all_rules(&self, _enabled_rules: FxHashSet<&str>) -> Option<String> {
         #[derive(Debug, Serialize)]
         struct RuleInfoJson<'a> {
             scope: &'a str,
             value: &'a str,
             category: RuleCategory,
+            #[cfg(feature = "ruledocs")]
+            version: &'a str,
             type_aware: bool,
             fix: String,
             default: bool,
@@ -42,25 +45,29 @@ impl InternalFormatter for JsonOutputFormatter {
             .map(oxc_linter::rules::RuleEnum::name)
             .collect();
 
-        let rules_info = RULES.iter().map(|rule| RuleInfoJson {
-            scope: rule.plugin_name(),
-            value: rule.name(),
-            category: rule.category(),
-            type_aware: rule.is_tsgolint_rule(),
-            fix: rule.fix().to_string(),
-            default: default_rules.contains(rule.name()),
-            docs_url: format!(
-                "https://oxc.rs/docs/guide/usage/linter/rules/{}/{}.html",
-                rule.plugin_name(),
-                rule.name()
-            )
-            .into(),
-        });
+        let mut rules_info: Vec<_> = RULES
+            .iter()
+            .map(|rule| RuleInfoJson {
+                scope: rule.plugin_name(),
+                value: rule.name(),
+                category: rule.category(),
+                #[cfg(feature = "ruledocs")]
+                version: rule.version(),
+                type_aware: rule.is_tsgolint_rule(),
+                fix: rule.fix().to_string(),
+                default: default_rules.contains(rule.name()),
+                docs_url: format!(
+                    "https://oxc.rs/docs/guide/usage/linter/rules/{}/{}.html",
+                    rule.plugin_name(),
+                    rule.name()
+                )
+                .into(),
+            })
+            .collect();
 
-        Some(
-            serde_json::to_string_pretty(&rules_info.collect::<Vec<_>>())
-                .expect("Failed to serialize"),
-        )
+        rules_info.sort_by_key(|rule| (rule.scope, rule.value));
+
+        Some(serde_json::to_string_pretty(&rules_info).expect("Failed to serialize"))
     }
 
     fn lint_command_info(&self, lint_command_info: &super::LintCommandInfo) -> Option<String> {
@@ -151,7 +158,9 @@ mod test {
     use oxc_diagnostics::{NamedSource, OxcDiagnostic, reporter::DiagnosticResult};
     use oxc_span::Span;
 
-    use crate::output_formatter::{InternalFormatter, LintCommandInfo, json::JsonOutputFormatter};
+    use crate::output_formatter::{
+        InternalFormatter, LintCommandInfo, OxlintSuppressionFileAction, json::JsonOutputFormatter,
+    };
 
     #[test]
     fn reporter() {
@@ -177,6 +186,8 @@ mod test {
                 number_of_rules: Some(0),
                 start_time: Duration::new(0, 0),
                 threads_count: 1,
+                oxlint_suppression_file_action: OxlintSuppressionFileAction::None,
+                rule_timings: None,
             })
             .unwrap();
         assert_eq!(

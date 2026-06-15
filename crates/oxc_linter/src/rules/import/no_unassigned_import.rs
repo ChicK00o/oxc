@@ -7,7 +7,8 @@ use oxc_ast::{
 };
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
-use oxc_span::{CompactStr, Span};
+use oxc_span::Span;
+use oxc_str::CompactStr;
 use serde::Deserialize;
 
 use crate::{
@@ -30,7 +31,7 @@ pub struct NoUnassignedImport(Box<NoUnassignedImportConfig>);
 pub struct NoUnassignedImportConfig {
     /// A list of glob patterns to allow unassigned imports for specific modules.
     /// For example:
-    /// `{ "allow": ["*.css"] }` will allow unassigned imports for any module ending with `.css`.
+    /// `{ "allow": ["**/*.css"] }` will allow unassigned imports for any module ending with `.css`.
     #[serde(rename = "allow", default)]
     globs: Vec<CompactStr>,
 }
@@ -80,7 +81,9 @@ declare_oxc_lint!(
     NoUnassignedImport,
     import,
     suspicious,
-    config = NoUnassignedImportConfig
+    config = NoUnassignedImportConfig,
+    version = "0.16.11",
+    short_description = "This rule aims to remove modules with side-effects by reporting when a module is imported but not assigned.",
 );
 
 impl Rule for NoUnassignedImport {

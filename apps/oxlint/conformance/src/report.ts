@@ -3,8 +3,7 @@
  */
 
 import { join as pathJoin, sep as pathSep } from "node:path";
-import { pathToFileURL } from "node:url";
-import { CONFORMANCE_DIR_PATH } from "./run.ts";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { RuleResult, TestResult } from "./capture.ts";
 import type { TestCase } from "./rule_tester.ts";
@@ -12,7 +11,7 @@ import type { TestCase } from "./rule_tester.ts";
 // Number of lines of stack trace to show in report for each error
 const STACK_TRACE_LINES = 4;
 
-const ROOT_DIR_PATH = pathJoin(CONFORMANCE_DIR_PATH, "../../../");
+const ROOT_DIR_PATH = pathJoin(fileURLToPath(import.meta.url), "../../../../../");
 const ROOT_DIR_URL = pathToFileURL(ROOT_DIR_PATH).href;
 const DIST_DIR_SUBPATH = "apps/oxlint/dist";
 
@@ -22,10 +21,20 @@ const normalizeSlashes =
 
 /**
  * Generate report of test results as markdown.
- * @param results - Results of running tests
- * @returns Report as markdown
+ * @param groupName - Name of the test group or suite.
+ * @param repoUrl - URL of the repository containing the rules and tests.
+ * @param commitSha - Commit SHA associated with this test run.
+ * @param version - Version of the tool or ruleset used for the tests.
+ * @param results - Results of running tests.
+ * @returns Report as markdown.
  */
-export function generateReport(results: RuleResult[]): string {
+export function generateReport(
+  groupName: string,
+  repoUrl: string,
+  commitSha: string,
+  version: string,
+  results: RuleResult[],
+): string {
   // Categorize rules
   const loadErrorRules: RuleResult[] = [],
     noTestRules: RuleResult[] = [],
@@ -119,8 +128,12 @@ export function generateReport(results: RuleResult[]): string {
     return `${String(count).padStart(5)} | ${formatPercent(count, total).padStart(6)}`;
   }
 
+  const shortSha = commitSha.slice(0, 7);
+
   block(`
-    # ESLint Rule Tester Conformance Results
+    # Conformance test results - ${groupName}
+
+    Tested against: [${groupName}@${shortSha}](${repoUrl}/tree/${commitSha}) (${version})
 
     ## Summary
 
@@ -253,7 +266,7 @@ function cleanString(str: string): string {
 }
 
 const STACK_LINE_REGEX = /^    at ([^ ]+ \()(.+)(:\d+:\d+)\)$/u;
-const STACK_LINE_REGEX2 = /^    at (.+)(:\d+:\d+)$/u;
+const STACK_LINE_REGEX2 = /^    at (.+?)(:\d+:\d+)?$/u;
 
 /**
  * Format an error for markdown output.
@@ -297,6 +310,7 @@ function formatError(err: Error | null): string {
       match = line.match(STACK_LINE_REGEX2);
       if (!match) break;
       [, path, lineCol] = match;
+      if (lineCol === undefined) lineCol = "";
       prefix = "";
       postfix = "";
     }
@@ -337,6 +351,13 @@ function formatTestCase(testCase: TestCase | null, code: string): string | null 
 
   // Remove `code` property if it's the same as the test case's code
   if (testCase.code === code) (testCase as { code?: string }).code = undefined;
+
+  // Shorten `filename` if it's a full path
+  let { filename } = testCase;
+  if (filename != null) {
+    if (filename.startsWith(ROOT_DIR_PATH)) filename = filename.slice(ROOT_DIR_PATH.length);
+    testCase.filename = normalizeSlashes(filename);
+  }
 
   try {
     return JSON.stringify(testCase, null, 2);

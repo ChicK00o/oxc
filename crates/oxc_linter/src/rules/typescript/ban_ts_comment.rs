@@ -14,6 +14,7 @@ fn comment(ts_comment_name: &str, span: Span) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!(
         "Do not use @ts-{ts_comment_name} because it alters compilation errors."
     ))
+    .with_help(format!("Remove the @ts-{ts_comment_name} directive and fix the underlying TypeScript error instead. If you must suppress an error, consider using @ts-expect-error with a descriptive comment explaining why it's necessary."))
     .with_label(span)
 }
 
@@ -27,6 +28,8 @@ fn comment_requires_description(ts_comment_name: &str, min_len: u64, span: Span)
     OxcDiagnostic::warn(format!(
         "Include a description after the @ts-{ts_comment_name} directive to explain why the @ts-{ts_comment_name} is necessary. The description must be {min_len} characters or longer."
     ))
+    .with_help(format!("Add a description after @ts-{ts_comment_name} that is at least {min_len} characters long, explaining why the directive is necessary. For example: `// @ts-{ts_comment_name}: TS2345 - This is a known limitation with third-party types`"))
+    .with_note("Requiring descriptions ensures that developers document why they're suppressing TypeScript errors, making it easier for future maintainers to understand the context and decide if the suppression is still necessary.")
     .with_label(span)
 }
 
@@ -38,6 +41,7 @@ fn comment_description_not_match_pattern(
     OxcDiagnostic::warn(format!(
         "The description for the @ts-{ts_comment_name} directive must match the {pattern} format."
     ))
+    .with_help(format!("Update the description after @ts-{ts_comment_name} to match the required pattern: {pattern}."))
     .with_label(span)
 }
 
@@ -45,7 +49,7 @@ fn comment_description_not_match_pattern(
 pub struct BanTsComment(Box<BanTsCommentConfig>);
 
 #[derive(Debug, Clone, JsonSchema)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 /// This rule allows you to specify how different TypeScript directive comments
 /// should be handled.
 ///
@@ -67,12 +71,16 @@ pub struct BanTsComment(Box<BanTsCommentConfig>);
 /// ```
 pub struct BanTsCommentConfig {
     /// How to handle the `@ts-expect-error` directive.
+    #[schemars(with = "DirectiveConfigSchema")]
     ts_expect_error: DirectiveConfig,
     /// How to handle the `@ts-ignore` directive.
+    #[schemars(with = "DirectiveConfigSchema")]
     ts_ignore: DirectiveConfig,
     /// How to handle the `@ts-nocheck` directive.
+    #[schemars(with = "DirectiveConfigSchema")]
     ts_nocheck: DirectiveConfig,
     /// How to handle the `@ts-check` directive.
+    #[schemars(with = "DirectiveConfigSchema")]
     ts_check: DirectiveConfig,
     /// Minimum description length required when using directives with `allow-with-description`.
     #[serde(rename = "minimumDescriptionLength")]
@@ -106,6 +114,25 @@ pub enum DirectiveConfig {
     #[serde(rename = "allow-with-description")]
     RequireDescription,
     DescriptionFormat(Option<Regex>),
+}
+
+#[derive(Debug, JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+#[expect(unused)]
+enum DirectiveConfigSchema {
+    Boolean(bool),
+    RequireDescription(RequireDescription),
+    DescriptionFormat {
+        #[serde(rename = "descriptionFormat")]
+        description_format: Option<Regex>,
+    },
+}
+
+#[derive(Debug, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+#[expect(unused)]
+enum RequireDescription {
+    AllowWithDescription,
 }
 
 impl DirectiveConfig {
@@ -155,6 +182,8 @@ declare_oxc_lint!(
     pedantic,
     conditional_fix,
     config = BanTsCommentConfig,
+    version = "0.0.8",
+    short_description = "This rule lets you set which directive comments you want to allow in your codebase.",
 );
 
 impl Rule for BanTsComment {
@@ -456,14 +485,6 @@ fn test() {
             /**
              * @ts-ignore not on the last line
              */
-        ",
-            None,
-        ),
-        (
-            r"
-            /* not on the last line
-            * @ts-expect-error
-            */
         ",
             None,
         ),

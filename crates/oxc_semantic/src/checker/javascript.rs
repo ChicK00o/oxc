@@ -1,19 +1,26 @@
 use memchr::memchr_iter;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use oxc_allocator::GetAddress;
 use oxc_ast::{AstKind, ModuleDeclarationKind, ast::*};
 use oxc_ecmascript::{BoundNames, IsSimpleParameterList, PropName};
-use oxc_span::{GetSpan, ModuleKind, Span};
+use oxc_span::{GetSpan, ModuleKind, Span, best_match};
+use oxc_str::Ident;
 use oxc_syntax::{
     class::ClassId,
     number::NumberBase,
-    operator::{AssignmentOperator, UnaryOperator},
+    operator::UnaryOperator,
     scope::{ScopeFlags, ScopeId},
     symbol::{SymbolFlags, SymbolId},
 };
 
-use crate::{IsGlobalReference, builder::SemanticBuilder, class::Element, diagnostics};
+use crate::{
+    IsGlobalReference, builder::SemanticBuilder, class::Element, diagnostics,
+    scoping::Redeclaration,
+};
+
+/// Threshold for edit distance when suggesting similar names
+const SUGGESTION_THRESHOLD: usize = 2;
 
 /// It is a Syntax Error if any element of the ExportedBindings of ModuleItemList
 /// does not also occur in either the VarDeclaredNames of ModuleItemList, or the LexicallyDeclaredNames of ModuleItemList.
@@ -22,26 +29,66 @@ pub fn check_unresolved_exports(program: &Program<'_>, ctx: &SemanticBuilder<'_>
         return;
     }
 
+    let mut available_names: Option<Vec<&str>> = None;
     for stmt in &program.body {
-        if let Statement::ExportNamedDeclaration(decl) = stmt {
+        if let Statement::ExportNamedDeclaration(decl) = stmt
+            && decl.source.is_none()
+        {
             for specifier in &decl.specifiers {
                 if let ModuleExportName::IdentifierReference(ident) = &specifier.local
                     && ident.is_global_reference(&ctx.scoping)
                 {
-                    ctx.errors
-                        .borrow_mut()
-                        .push(diagnostics::undefined_export(&ident.name, ident.span));
+                    let names = available_names.get_or_insert_with(|| {
+                        let root_scope_id = ctx.scoping.root_scope_id();
+                        ctx.scoping.get_bindings(root_scope_id).keys().map(Ident::as_str).collect()
+                    });
+                    let suggestion =
+                        best_match(&ident.name, names.iter().copied(), SUGGESTION_THRESHOLD);
+                    ctx.errors.borrow_mut().push(diagnostics::undefined_export(
+                        &ident.name,
+                        suggestion,
+                        ident.span,
+                    ));
                 }
             }
         }
     }
 }
 
+/// It is a Syntax Error if any element of the BoundNames of ImportDeclaration
+/// also occurs in the VarDeclaredNames or LexicallyDeclaredNames of ModuleItemList.
+/// <https://tc39.es/ecma262/#sec-imports-static-semantics-early-errors>
+pub fn check_import_value_redeclarations(ctx: &SemanticBuilder<'_>) {
+    if !ctx.source_type.is_module() || ctx.source_type.is_typescript() {
+        return;
+    }
+
+    let scope_id = ctx.scoping.root_scope_id();
+    for (_, &symbol_id) in ctx.scoping.get_bindings(scope_id) {
+        let flags = ctx.scoping.symbol_flags(symbol_id);
+        if !flags.contains(SymbolFlags::Import) {
+            continue;
+        }
+        if !flags.intersects(SymbolFlags::Variable | SymbolFlags::Class | SymbolFlags::Function) {
+            continue;
+        }
+        let redeclarations = ctx.scoping.symbol_redeclarations(symbol_id);
+        if redeclarations.len() < 2 {
+            continue;
+        }
+        let name = ctx.scoping.symbol_name(symbol_id);
+        let first = &redeclarations[0];
+        let last = &redeclarations[redeclarations.len() - 1];
+        ctx.error(diagnostics::redeclaration(name, first.span, last.span));
+    }
+}
+
 pub fn check_duplicate_class_elements(ctx: &SemanticBuilder<'_>) {
     let classes = &ctx.class_table_builder.classes;
     classes.iter_enumerated().for_each(|(class_id, _)| {
-        let mut defined_elements = FxHashMap::default();
         let elements = &classes.elements[class_id];
+        let mut defined_elements =
+            FxHashMap::with_capacity_and_hasher(elements.len(), FxBuildHasher);
         for (element_id, element) in elements.iter_enumerated() {
             if let Some(prev_element_id) = defined_elements.insert(&element.name, element_id) {
                 let prev_element = &elements[prev_element_id];
@@ -111,13 +158,17 @@ pub fn check_identifier(
     ctx: &SemanticBuilder<'_>,
 ) {
     // reserved keywords are allowed in ambient contexts
-    if ctx.source_type.is_typescript_definition() || is_current_node_ambient_binding(symbol_id, ctx)
-    {
-        return;
+    fn is_allowed_context(symbol_id: Option<SymbolId>, ctx: &SemanticBuilder<'_>) -> bool {
+        ctx.source_type.is_typescript_definition()
+            || is_current_node_ambient_binding(symbol_id, ctx)
     }
 
     match name {
         "await" => {
+            if is_allowed_context(symbol_id, ctx) {
+                return;
+            }
+
             // It is a Syntax Error if the goal symbol of the syntactic grammar is Module and the StringValue of IdentifierName is "await".
             if ctx.source_type.is_module() {
                 ctx.error(diagnostics::reserved_keyword(name, span));
@@ -130,9 +181,10 @@ pub fn check_identifier(
         // TODO: Revisit this match arm when we add `Ident` and pre-hash the identifier names and see if a HashSet
         // becomes better for performance again.
         "implements" | "interface" | "let" | "package" | "private" | "protected" | "public"
-        | "static" | "yield"
-            if ctx.strict_mode() =>
-        {
+        | "static" | "yield" => {
+            if !ctx.strict_mode() || is_allowed_context(symbol_id, ctx) {
+                return;
+            }
             // It is a Syntax Error if this phrase is contained in strict mode code and the StringValue of IdentifierName is: "implements", "interface", "let", "package", "private", "protected", "public", "static", or "yield".
             ctx.error(diagnostics::reserved_keyword(name, span));
         }
@@ -149,7 +201,7 @@ fn is_current_node_ambient_binding(symbol_id: Option<SymbolId>, ctx: &SemanticBu
         && ctx.scoping.symbol_flags(symbol_id).contains(SymbolFlags::Ambient)
     {
         true
-    } else if let AstKind::BindingIdentifier(id) = ctx.nodes.kind(ctx.current_node_id)
+    } else if let AstKind::BindingIdentifier(id) = ctx.ancestry().current_kind()
         && let Some(symbol_id) = id.symbol_id.get()
     {
         ctx.scoping.symbol_flags(symbol_id).contains(SymbolFlags::Ambient)
@@ -164,9 +216,9 @@ pub fn check_binding_identifier(ident: &BindingIdentifier, ctx: &SemanticBuilder
         return;
     }
 
-    if ctx.strict_mode() {
+    match ident.name.as_str() {
         // In strict mode, `eval` and `arguments` are banned as identifiers.
-        if matches!(ident.name.as_str(), "eval" | "arguments") {
+        "eval" | "arguments" if ctx.strict_mode() => {
             // `eval` and `arguments` are allowed as the names of declare functions as well as their arguments.
             //
             // declare function eval(): void; // OK
@@ -183,16 +235,17 @@ pub fn check_binding_identifier(ident: &BindingIdentifier, ctx: &SemanticBuilder
                     .is_some_and(|func| matches!(func.r#type, FunctionType::TSDeclareFunction))
             };
 
-            let parent = ctx.nodes.parent_node(ctx.current_node_id);
-            let is_ok = match parent.kind() {
+            // Walk up the ancestor stack: `ancestors.next()` yields the parent,
+            // then the grandparent, and so on.
+            let mut ancestors = ctx.ancestry().ancestor_kinds();
+            let parent = ancestors.next().unwrap();
+            let is_ok = match parent {
                 AstKind::Function(func) => matches!(func.r#type, FunctionType::TSDeclareFunction),
                 AstKind::FormalParameter(_) | AstKind::FormalParameterRest(_) => {
-                    is_declare_function(&ctx.nodes.parent_kind(parent.id()))
+                    is_declare_function(&ancestors.next().unwrap())
                 }
-                AstKind::BindingRestElement(_) => {
-                    let grand_parent = ctx.nodes.parent_node(parent.id());
-                    is_declare_function(&ctx.nodes.parent_kind(grand_parent.id()))
-                }
+                // `nth(1)` skips the `FormalParameter*` grandparent to reach the function.
+                AstKind::BindingRestElement(_) => is_declare_function(&ancestors.nth(1).unwrap()),
                 _ => false,
             };
 
@@ -200,11 +253,10 @@ pub fn check_binding_identifier(ident: &BindingIdentifier, ctx: &SemanticBuilder
                 ctx.error(diagnostics::unexpected_identifier_assign(&ident.name, ident.span));
             }
         }
-    } else {
-        // LexicalDeclaration : LetOrConst BindingList ;
-        // * It is a Syntax Error if the BoundNames of BindingList contains "let".
-        if ident.name == "let" {
-            for node_kind in ctx.nodes.ancestor_kinds(ctx.current_node_id) {
+        "let" if !ctx.strict_mode() => {
+            // LexicalDeclaration : LetOrConst BindingList ;
+            // * It is a Syntax Error if the BoundNames of BindingList contains "let".
+            for node_kind in ctx.ancestry().ancestor_kinds() {
                 match node_kind {
                     AstKind::VariableDeclarator(decl) => {
                         if decl.kind.is_lexical() {
@@ -220,6 +272,7 @@ pub fn check_binding_identifier(ident: &BindingIdentifier, ctx: &SemanticBuilder
                 }
             }
         }
+        _ => {}
     }
 }
 
@@ -231,8 +284,8 @@ pub fn check_identifier_reference(ident: &IdentifierReference, ctx: &SemanticBui
 
     //  Static Semantics: AssignmentTargetType
     //  1. If this IdentifierReference is contained in strict mode code and StringValue of Identifier is "eval" or "arguments", return invalid.
-    if ctx.strict_mode() && matches!(ident.name.as_str(), "arguments" | "eval") {
-        for node_kind in ctx.nodes.ancestor_kinds(ctx.current_node_id) {
+    if matches!(ident.name.as_str(), "arguments" | "eval") && ctx.strict_mode() {
+        for node_kind in ctx.ancestry().ancestor_kinds() {
             match node_kind {
                 // Only check for actual assignment contexts, not member expression access
                 AstKind::ObjectAssignmentTarget(_)
@@ -268,21 +321,20 @@ pub fn check_identifier_reference(ident: &IdentifierReference, ctx: &SemanticBui
     //   It is a Syntax Error if ContainsArguments of ClassStaticBlockStatementList is true.
 
     if ident.name == "arguments" {
-        let mut previous_node_address = ctx.nodes.get_node(ctx.current_node_id).address();
-        for node_kind in ctx.nodes.ancestor_kinds(ctx.current_node_id) {
+        let mut previous_node_address = ctx.ancestry().current_address();
+        for node_kind in ctx.ancestry().ancestor_kinds() {
             match node_kind {
                 AstKind::Function(_) => break,
-                AstKind::PropertyDefinition(prop) => {
+                AstKind::PropertyDefinition(prop)
                     if prop
                         .value
                         .as_ref()
-                        .is_some_and(|value| value.address() == previous_node_address)
-                    {
-                        return ctx.error(diagnostics::unexpected_arguments(
-                            "class field initializer",
-                            ident.span,
-                        ));
-                    }
+                        .is_some_and(|value| value.address() == previous_node_address) =>
+                {
+                    return ctx.error(diagnostics::unexpected_arguments(
+                        "class field initializer",
+                        ident.span,
+                    ));
                 }
                 AstKind::StaticBlock(_) => {
                     return ctx.error(diagnostics::unexpected_arguments(
@@ -308,11 +360,30 @@ pub fn check_private_identifier_outside_class(
 
 fn check_private_identifier(ctx: &SemanticBuilder<'_>) {
     if let Some(class_id) = ctx.class_table_builder.current_class_id {
+        let mut available_names: Option<Vec<&str>> = None;
         for reference in ctx.class_table_builder.classes.iter_private_identifiers(class_id) {
             if !ctx.class_table_builder.classes.ancestors(class_id).any(|class_id| {
-                ctx.class_table_builder.classes.has_private_definition(class_id, &reference.name)
+                ctx.class_table_builder.classes.has_private_definition(class_id, reference.name)
             }) {
-                ctx.error(diagnostics::private_field_undeclared(&reference.name, reference.span));
+                let names = available_names.get_or_insert_with(|| {
+                    let mut names = Vec::new();
+                    for ancestor_class_id in ctx.class_table_builder.classes.ancestors(class_id) {
+                        for element in &ctx.class_table_builder.classes.elements[ancestor_class_id]
+                        {
+                            if element.is_private {
+                                names.push(element.name.as_ref());
+                            }
+                        }
+                    }
+                    names
+                });
+                let suggestion =
+                    best_match(&reference.name, names.iter().copied(), SUGGESTION_THRESHOLD);
+                ctx.error(diagnostics::private_field_undeclared(
+                    &reference.name,
+                    suggestion,
+                    reference.span,
+                ));
             }
         }
     }
@@ -322,28 +393,22 @@ pub fn check_number_literal(lit: &NumericLiteral, ctx: &SemanticBuilder<'_>) {
     // NumericLiteral :: legacy_octalIntegerLiteral
     // DecimalIntegerLiteral :: NonOctalDecimalIntegerLiteral
     // * It is a Syntax Error if the source text matched by this production is strict mode code.
-    fn leading_zero(s: Option<Atom>) -> bool {
+    fn leading_zero(s: Option<Str>) -> bool {
         if let Some(s) = s {
-            let mut chars = s.bytes();
-            if let Some(first) = chars.next()
-                && let Some(second) = chars.next()
-            {
-                return first == b'0' && second.is_ascii_digit();
-            }
+            let bytes = s.as_bytes();
+            return bytes.len() >= 2 && bytes[0] == b'0' && bytes[1].is_ascii_digit();
         }
         false
     }
 
-    if ctx.strict_mode() {
-        match lit.base {
-            NumberBase::Octal if leading_zero(lit.raw) => {
-                ctx.error(diagnostics::legacy_octal(lit.span));
-            }
-            NumberBase::Decimal | NumberBase::Float if leading_zero(lit.raw) => {
-                ctx.error(diagnostics::leading_zero_decimal(lit.span));
-            }
-            _ => {}
+    match lit.base {
+        NumberBase::Octal if leading_zero(lit.raw) && ctx.strict_mode() => {
+            ctx.error(diagnostics::legacy_octal(lit.span));
         }
+        NumberBase::Decimal | NumberBase::Float if leading_zero(lit.raw) && ctx.strict_mode() => {
+            ctx.error(diagnostics::leading_zero_decimal(lit.span));
+        }
+        _ => {}
     }
 }
 
@@ -406,10 +471,8 @@ pub fn check_string_literal(lit: &StringLiteral, ctx: &SemanticBuilder<'_>) {
             while let Some(b) = bytes.next() {
                 if b == b'\\' {
                     match bytes.next() {
-                        Some(b'0') => {
-                            if bytes.peek().is_some_and(u8::is_ascii_digit) {
-                                return ctx.error(diagnostics::legacy_octal(lit.span));
-                            }
+                        Some(b'0') if bytes.peek().is_some_and(u8::is_ascii_digit) => {
+                            return ctx.error(diagnostics::legacy_octal(lit.span));
                         }
                         Some(b'1'..=b'7') => {
                             return ctx.error(diagnostics::legacy_octal(lit.span));
@@ -437,7 +500,7 @@ pub fn check_directive(directive: &Directive, ctx: &SemanticBuilder<'_>) {
         return;
     }
 
-    if matches!(ctx.nodes.kind(ctx.scoping.get_node_id(ctx.current_scope_id)),
+    if matches!(ctx.ancestry().find_kind_by_node_id(ctx.scoping.get_node_id(ctx.current_scope_id)),
         AstKind::Function(Function { params, .. })
         | AstKind::ArrowFunctionExpression(ArrowFunctionExpression { params, .. })
         if !params.is_simple_parameter_list())
@@ -474,7 +537,7 @@ pub fn check_module_declaration(decl: &ModuleDeclarationKind, ctx: &SemanticBuil
             ctx.error(diagnostics::module_code(text, span));
         }
         ModuleKind::Module => {
-            if matches!(ctx.nodes.parent_kind(ctx.current_node_id), AstKind::Program(_)) {
+            if matches!(ctx.ancestry().parent_kind(), AstKind::Program(_)) {
                 return;
             }
             ctx.error(diagnostics::top_level(text, span));
@@ -496,71 +559,8 @@ pub fn check_variable_declaration(decl: &VariableDeclaration, ctx: &SemanticBuil
     {
         ctx.error(diagnostics::using_declaration_not_allowed_in_script(decl.span));
     }
-}
-
-pub fn check_meta_property(prop: &MetaProperty, ctx: &SemanticBuilder<'_>) {
-    match prop.meta.name.as_str() {
-        "import" => {
-            // import.meta is only allowed in ES modules, not in scripts or CommonJS
-            if prop.property.name == "meta" && !ctx.source_type.is_module() {
-                ctx.error(diagnostics::import_meta(prop.span));
-            }
-        }
-        "new" => {
-            if prop.property.name == "target" {
-                // In CommonJS, the file is wrapped in a function, so new.target is always valid
-                if ctx.source_type.is_commonjs() {
-                    return;
-                }
-
-                // Check if we're in a valid context for new.target:
-                // 1. Inside a function (including constructor)
-                // 2. Inside a class static block
-                // 3. Inside a class field initializer (new.target evaluates to undefined)
-                //
-                // Arrow functions inherit new.target from their surrounding scope,
-                // so we skip them and continue checking the enclosing context.
-
-                let mut in_valid_context = false;
-
-                // First, check AST ancestors for class field initializers.
-                // We need to do this because class fields don't have their own scope.
-                for node_kind in ctx.nodes.ancestor_kinds(ctx.current_node_id) {
-                    match node_kind {
-                        // Regular functions have their own new.target binding.
-                        // Use scope-based check from here.
-                        AstKind::Function(_) => break,
-                        // Class field initializers allow new.target (evaluates to undefined).
-                        // This includes arrow functions nested inside the initializer.
-                        AstKind::PropertyDefinition(_) | AstKind::AccessorProperty(_) => {
-                            in_valid_context = true;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-
-                // If not in a class field, fall back to scope-based check
-                if !in_valid_context {
-                    for scope_id in ctx.scoping.scope_ancestors(ctx.current_scope_id) {
-                        let flags = ctx.scoping.scope_flags(scope_id);
-                        // In arrow functions, new.target is inherited from the surrounding scope.
-                        if flags.contains(ScopeFlags::Arrow) {
-                            continue;
-                        }
-                        if flags.intersects(ScopeFlags::Function | ScopeFlags::ClassStaticBlock) {
-                            in_valid_context = true;
-                            break;
-                        }
-                    }
-                }
-
-                if !in_valid_context {
-                    ctx.error(diagnostics::new_target(prop.span));
-                }
-            }
-        }
-        _ => {}
+    if decl.kind.is_await() && is_in_class_static_block(ctx) {
+        ctx.error(diagnostics::class_static_block_await_using(decl.span));
     }
 }
 
@@ -589,7 +589,7 @@ pub fn check_function_declaration_in_labeled_statement<'a>(
             ctx.error(diagnostics::function_declaration_strict(decl.span));
         } else {
             // skip(1) for `LabeledStatement`
-            for kind in ctx.nodes.ancestor_kinds(ctx.current_node_id) {
+            for kind in ctx.ancestry().ancestor_kinds() {
                 match kind {
                     // Nested labeled statement
                     AstKind::LabeledStatement(_) => {}
@@ -614,10 +614,17 @@ pub fn check_variable_declarator_redeclaration(
     decl: &VariableDeclarator,
     ctx: &SemanticBuilder<'_>,
 ) {
-    if decl.kind != VariableDeclarationKind::Var
-        || ctx.current_scope_flags().intersects(ScopeFlags::Top | ScopeFlags::Function)
+    if decl.kind != VariableDeclarationKind::Var {
+        return;
+    }
+
+    let scope_flags = ctx.current_scope_flags();
+    // `function a() {}; var a;` and `function b() { function a() {}; var a; }` are valid
+    // in script mode, but in module mode at the top level, function declarations are
+    // lexically scoped, so `function a() {}; var a;` is a redeclaration error.
+    if scope_flags.intersects(ScopeFlags::Top | ScopeFlags::Function)
+        && !(ctx.source_type.is_module() && scope_flags.is_top())
     {
-        // `function a() {}; var a;` and `function b() { function a() {}; var a; }` are valid
         return;
     }
 
@@ -625,7 +632,8 @@ pub fn check_variable_declarator_redeclaration(
         let redeclarations = ctx.scoping.symbol_redeclarations(ident.symbol_id());
         let Some(rd) = redeclarations.iter().nth_back(1) else { return };
 
-        // `{ function f() {}; var f; }` is invalid in both strict and non-strict mode
+        // `{ function f() {}; var f; }` is invalid in both strict and non-strict mode.
+        // In module mode at the top level, `function f() {}; var f;` is also invalid.
         if rd.flags.is_function() {
             ctx.error(diagnostics::redeclaration(&ident.name, rd.span, decl.span));
         }
@@ -649,7 +657,7 @@ pub fn is_function_decl_part_of_if_statement(
     // A function declaration whose parent is an `IfStatement` can only be
     // either that `IfStatement`'s `consequent` or `alternate`
     // (can't be `test` because that's an expression)
-    matches!(builder.nodes.parent_kind(builder.current_node_id), AstKind::IfStatement(_))
+    matches!(builder.ancestry().parent_kind(), AstKind::IfStatement(_))
 }
 
 // It is a Syntax Error if the LexicallyDeclaredNames of StatementList contains any duplicate entries,
@@ -665,17 +673,36 @@ pub fn check_function_redeclaration(func: &Function, ctx: &SemanticBuilder<'_>) 
     // Skip that case.
     let Some(id) = &func.id else { return };
 
+    // Redeclarations are rare, so put the expensive logic for handling them in a separate `#[cold]` function,
+    // so that this function can be inlined.
+    // The redeclarations list is only ever empty or has 2+ entries (it is created with its first two
+    // declarations at once), so `is_empty` is a sufficient test.
+    let redeclarations = ctx.scoping.symbol_redeclarations(id.symbol_id());
+    if !redeclarations.is_empty() {
+        check_redeclared_function(func, id, redeclarations, ctx);
+    }
+}
+
+/// Check whether a redeclared function declaration is illegal (Annex B.3.3 and related rules),
+/// and report it if so.
+///
+/// Split out of `check_function_redeclaration` and marked `#[cold]` as it only runs when `func`'s name
+/// already has an earlier declaration in the same scope, which is very rare in practice.
+#[cold]
+fn check_redeclared_function(
+    func: &Function,
+    id: &BindingIdentifier,
+    redeclarations: &[Redeclaration],
+    ctx: &SemanticBuilder<'_>,
+) {
     if is_function_decl_part_of_if_statement(func, ctx) {
         return;
     }
 
-    let symbol_id = id.symbol_id();
-
-    let redeclarations = ctx.scoping.symbol_redeclarations(symbol_id);
-    let Some(prev) = redeclarations.iter().nth_back(1) else {
-        // No redeclarations
-        return;
-    };
+    // The current declaration is the last entry; `prev` is the one before it.
+    // The list always has 2+ entries here (see `check_function_redeclaration`), so a previous declaration exists.
+    debug_assert!(redeclarations.len() >= 2);
+    let prev = &redeclarations[redeclarations.len() - 2];
 
     // Already checked in `check_redeclaration`, because it is also not allowed in TypeScript.
     // `let a; function a() {}` is invalid in both strict and non-strict mode.
@@ -696,10 +723,29 @@ pub fn check_function_redeclaration(func: &Function, ctx: &SemanticBuilder<'_>) 
         // `function a() { var b; function b() { } }` valid in any mode.
         return;
     } else if !(current_scope_flags.is_strict_mode() || func.r#async || func.generator) {
-        // `class a {}; function a() {}` and `async function a() {} function a () {}` are
-        // invalid in both strict and non-strict mode.
-        let prev_function = ctx.nodes.kind(prev.declaration).as_function();
-        if prev_function.is_some_and(|func| !(func.r#async || func.generator)) {
+        // Current declaration is a plain function in a sloppy-mode block. Annex B.3.3 permits
+        // duplicate *plain* function declarations here, but the relaxation does not extend to
+        // `async`/generator functions, nor to non-function declarations like `class a {}`.
+        if prev.flags.contains(SymbolFlags::Function) {
+            // `prev` is a function, so the function-duplicate rule (Annex B.3.3) is violated
+            // only if an earlier declaration is an `async`/generator function.
+            // Search for a declaration that makes it illegal, so the error can point at it.
+            // (A clash with a `var`/`let`/`class` of the same name is a separate rule, reported elsewhere.)
+            // This branch is only reached for function redeclarations in a sloppy-mode block,
+            // which are extremely rare, so the linear scan's high cost does not really matter.
+            // Annex B.3.3 is JavaScript-only; TypeScript allows these (overloads/merging).
+            if ctx.source_type.is_typescript() {
+                return;
+            }
+            let previous_declarations = &redeclarations[..redeclarations.len() - 1];
+            let Some(culprit) = previous_declarations
+                .iter()
+                .find(|decl| decl.flags.contains(SymbolFlags::AsyncOrGeneratorFunction))
+            else {
+                // No `async`/generator function among the previous declarations - allowed by B.3.3.
+                return;
+            };
+            ctx.error(diagnostics::redeclaration(&id.name, culprit.span, id.span));
             return;
         }
     }
@@ -728,27 +774,22 @@ pub fn check_with_statement(stmt: &WithStatement, ctx: &SemanticBuilder<'_>) {
     }
 }
 
-pub fn check_switch_statement<'a>(stmt: &SwitchStatement<'a>, ctx: &SemanticBuilder<'a>) {
-    let mut previous_default: Option<Span> = None;
-    for case in &stmt.cases {
-        if case.test.is_none() {
-            if let Some(previous_span) = previous_default {
-                ctx.error(diagnostics::redeclaration("default", previous_span, case.span));
-                break;
-            }
-            previous_default.replace(case.span);
-        }
-    }
-}
-
 pub fn check_break_statement(stmt: &BreakStatement, ctx: &SemanticBuilder<'_>) {
     // It is a Syntax Error if this BreakStatement is not nested, directly or indirectly (but not crossing function or static initialization block boundaries), within an IterationStatement or a SwitchStatement.
-    for node_kind in ctx.nodes.ancestor_kinds(ctx.current_node_id) {
+
+    let mut available_labels: Option<Vec<&str>> = None;
+    for node_kind in ctx.ancestry().ancestor_kinds() {
         match node_kind {
             AstKind::Program(_) => {
                 return stmt.label.as_ref().map_or_else(
                     || ctx.error(diagnostics::invalid_break(stmt.span)),
-                    |label| ctx.error(diagnostics::invalid_label_target(label.span)),
+                    |label| {
+                        let labels =
+                            available_labels.get_or_insert_with(|| collect_label_names(ctx));
+                        let suggestion =
+                            best_match(&label.name, labels.iter().copied(), SUGGESTION_THRESHOLD);
+                        ctx.error(diagnostics::invalid_label_target(suggestion, label.span));
+                    },
                 );
             }
             AstKind::Function(_) | AstKind::StaticBlock(_) => {
@@ -757,14 +798,13 @@ pub fn check_break_statement(stmt: &BreakStatement, ctx: &SemanticBuilder<'_>) {
                     |label| ctx.error(diagnostics::invalid_label_jump_target(label.span)),
                 );
             }
-            AstKind::LabeledStatement(labeled_statement) => {
+            AstKind::LabeledStatement(labeled_statement)
                 if stmt
                     .label
                     .as_ref()
-                    .is_some_and(|label| label.name == labeled_statement.label.name)
-                {
-                    break;
-                }
+                    .is_some_and(|label| label.name == labeled_statement.label.name) =>
+            {
+                break;
             }
             kind if (kind.is_iteration_statement()
                 || matches!(kind, AstKind::SwitchStatement(_)))
@@ -779,12 +819,20 @@ pub fn check_break_statement(stmt: &BreakStatement, ctx: &SemanticBuilder<'_>) {
 
 pub fn check_continue_statement(stmt: &ContinueStatement, ctx: &SemanticBuilder<'_>) {
     // It is a Syntax Error if this ContinueStatement is not nested, directly or indirectly (but not crossing function or static initialization block boundaries), within an IterationStatement.
-    for node_kind in ctx.nodes.ancestor_kinds(ctx.current_node_id) {
+
+    let mut available_labels: Option<Vec<&str>> = None;
+    for node_kind in ctx.ancestry().ancestor_kinds() {
         match node_kind {
             AstKind::Program(_) => {
                 return stmt.label.as_ref().map_or_else(
                     || ctx.error(diagnostics::invalid_continue(stmt.span)),
-                    |label| ctx.error(diagnostics::invalid_label_target(label.span)),
+                    |label| {
+                        let labels =
+                            available_labels.get_or_insert_with(|| collect_label_names(ctx));
+                        let suggestion =
+                            best_match(&label.name, labels.iter().copied(), SUGGESTION_THRESHOLD);
+                        ctx.error(diagnostics::invalid_label_target(suggestion, label.span));
+                    },
                 );
             }
             AstKind::Function(_) | AstKind::StaticBlock(_) => {
@@ -820,8 +868,20 @@ pub fn check_continue_statement(stmt: &ContinueStatement, ctx: &SemanticBuilder<
     }
 }
 
+fn collect_label_names<'a>(ctx: &'_ SemanticBuilder<'a>) -> Vec<&'a str> {
+    let mut labels = Vec::new();
+    for node_kind in ctx.ancestry().ancestor_kinds() {
+        if let AstKind::LabeledStatement(labeled_statement) = node_kind {
+            labels.push(labeled_statement.label.name.as_str());
+        } else if matches!(node_kind, AstKind::Function(_) | AstKind::StaticBlock(_)) {
+            break;
+        }
+    }
+    labels
+}
+
 pub fn check_labeled_statement(stmt: &LabeledStatement, ctx: &SemanticBuilder<'_>) {
-    for node_kind in ctx.nodes.ancestor_kinds(ctx.current_node_id) {
+    for node_kind in ctx.ancestry().ancestor_kinds() {
         match node_kind {
             // label cannot cross boundary on function or static block
             AstKind::Function(_)
@@ -871,15 +931,20 @@ pub fn check_for_statement_left(
     }
 }
 
+pub fn check_for_of_statement(stmt: &ForOfStatement, ctx: &SemanticBuilder<'_>) {
+    // ClassStaticBlockBody : ClassStaticBlockStatementList
+    //   It is a Syntax Error if ClassStaticBlockStatementList Contains await is true.
+    if stmt.r#await && is_in_class_static_block(ctx) {
+        ctx.error(diagnostics::class_static_block_for_await(stmt.span));
+    }
+}
+
 pub fn check_class(class: &Class, ctx: &SemanticBuilder<'_>) {
     check_private_identifier(ctx);
 
     if class.is_declaration()
         && class.id.is_none()
-        && !matches!(
-            ctx.nodes.parent_kind(ctx.current_node_id),
-            AstKind::ExportDefaultDeclaration(_)
-        )
+        && !matches!(ctx.ancestry().parent_kind(), AstKind::ExportDefaultDeclaration(_))
     {
         let start = class.span.start;
         ctx.error(diagnostics::require_class_name(Span::sized(start, 5)));
@@ -908,7 +973,7 @@ pub fn check_class(class: &Class, ctx: &SemanticBuilder<'_>) {
 
 pub fn check_super(sup: &Super, ctx: &SemanticBuilder<'_>) {
     // `Some` for `super()`, `None` for `super.foo` / `super.bar()` etc
-    let super_call_span = match ctx.nodes.parent_kind(ctx.current_node_id) {
+    let super_call_span = match ctx.ancestry().parent_kind() {
         AstKind::CallExpression(expr) => Some(expr.span),
         AstKind::NewExpression(expr) => Some(expr.span),
         _ => None,
@@ -944,14 +1009,15 @@ pub fn check_super(sup: &Super, ctx: &SemanticBuilder<'_>) {
             // So when visiting `super` in `class Outer { method() { class Inner extends super.foo {} } }`,
             // `ctx.class_table_builder.current_class_id` is `Outer` class, not `Inner`.
 
-            let search_start_node_id = if let Some(previous_scope_id) = previous_scope_id {
-                ctx.scoping.get_node_id(previous_scope_id)
-            } else {
-                ctx.current_node_id
-            };
-            let mut previous_node_address = ctx.nodes.kind(search_start_node_id).address();
+            // Walk up the ancestors, starting either from the previously reached
+            // class's node, or from the current node (`super`) itself.
+            let start = previous_scope_id
+                .map(|previous_scope_id| ctx.scoping.get_node_id(previous_scope_id));
+            let mut kinds_from = ctx.ancestry().ancestor_kinds_from(start);
+            // First kind is the start node itself; remaining kinds are its ancestors.
+            let mut previous_node_address = kinds_from.next().unwrap().address();
 
-            for ancestor_kind in ctx.nodes.ancestor_kinds(search_start_node_id) {
+            for ancestor_kind in kinds_from {
                 match ancestor_kind {
                     AstKind::PropertyDefinition(prop) => {
                         if prop
@@ -1079,9 +1145,11 @@ pub fn check_super(sup: &Super, ctx: &SemanticBuilder<'_>) {
         // `super()` is only legal if in a class constructor.
         // If function is anywhere else, both `super()` and `super.foo` are illegal.
         let func_node_id = ctx.scoping.get_node_id(scope_id);
-        let func_address = ctx.nodes.kind(func_node_id).address();
+        // Walk up from the function node: first is the function, second its parent.
+        let mut func_kinds = ctx.ancestry().ancestor_kinds_from(Some(func_node_id));
+        let func_address = func_kinds.next().unwrap().address();
 
-        match ctx.nodes.parent_kind(func_node_id) {
+        match func_kinds.next().unwrap() {
             AstKind::ObjectProperty(prop) => {
                 // Function's parent is an `ObjectProperty`.
                 // Check the function is a method/getter/setter, not a normal property.
@@ -1132,7 +1200,8 @@ pub fn check_super(sup: &Super, ctx: &SemanticBuilder<'_>) {
                         }
 
                         let class_node_id = ctx.class_table_builder.classes.get_node_id(class_id);
-                        let class = ctx.nodes.kind(class_node_id).as_class().unwrap();
+                        let class =
+                            ctx.ancestry().find_kind_by_node_id(class_node_id).as_class().unwrap();
                         if class.super_class.is_none() {
                             ctx.error(diagnostics::super_without_derived_class(
                                 sup.span, class.span,
@@ -1166,29 +1235,24 @@ fn get_class_details(
         return (None, ClassId::new(0)); // Dummy class ID
     };
     let node_id = ctx.class_table_builder.classes.get_node_id(class_id);
-    let class = ctx.nodes.kind(node_id).as_class().unwrap();
+    let class = ctx.ancestry().find_kind_by_node_id(node_id).as_class().unwrap();
     let scope_id = class.scope_id();
     (Some(scope_id), class_id)
-}
-
-pub fn check_assignment_expression(assign_expr: &AssignmentExpression, ctx: &SemanticBuilder<'_>) {
-    // AssignmentExpression :
-    //     LeftHandSideExpression AssignmentOperator AssignmentExpression
-    //     LeftHandSideExpression &&= AssignmentExpression
-    //     LeftHandSideExpression ||= AssignmentExpression
-    //     LeftHandSideExpression ??= AssignmentExpression
-    // It is a Syntax Error if AssignmentTargetType of LeftHandSideExpression is not SIMPLE.
-    if assign_expr.operator != AssignmentOperator::Assign
-        && !assign_expr.left.is_simple_assignment_target()
-    {
-        ctx.error(diagnostics::assignment_is_not_simple(assign_expr.left.span()));
-    }
 }
 
 pub fn check_object_expression(obj_expr: &ObjectExpression, ctx: &SemanticBuilder<'_>) {
     // ObjectLiteral : { PropertyDefinitionList }
     // It is a Syntax Error if PropertyNameList of PropertyDefinitionList contains any duplicate entries for "__proto__"
     // and at least two of those entries were obtained from productions of the form PropertyDefinition : PropertyName : AssignmentExpression
+
+    // A duplicate requires ≥2 entries. JSX/TSX call sites emit huge numbers
+    // of single-property object literals (`<Foo prop={x}>` → `{prop: x}`), so
+    // the early-exit skips the loop setup and `prop_name()` call for those
+    // very common cases.
+    if obj_expr.properties.len() < 2 {
+        return;
+    }
+
     let mut prev_proto: Option<Span> = None;
     for prop in &obj_expr.properties {
         if let ObjectPropertyKind::ObjectProperty(obj_prop) = prop {
@@ -1206,16 +1270,6 @@ pub fn check_object_expression(obj_expr: &ObjectExpression, ctx: &SemanticBuilde
                 prev_proto = Some(span);
             }
         }
-    }
-}
-
-pub fn check_private_field_expression(
-    private_expr: &PrivateFieldExpression,
-    ctx: &SemanticBuilder<'_>,
-) {
-    // `super.#m`
-    if private_expr.object.is_super() {
-        ctx.error(diagnostics::super_private(private_expr.span));
     }
 }
 
@@ -1240,7 +1294,7 @@ pub fn check_unary_expression(unary_expr: &UnaryExpression, ctx: &SemanticBuilde
 }
 
 fn is_in_formal_parameters(ctx: &SemanticBuilder<'_>) -> bool {
-    for node_kind in ctx.nodes.ancestor_kinds(ctx.current_node_id) {
+    for node_kind in ctx.ancestry().ancestor_kinds() {
         match node_kind {
             AstKind::FormalParameter(_) => return true,
             AstKind::Program(_) | AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
@@ -1252,12 +1306,28 @@ fn is_in_formal_parameters(ctx: &SemanticBuilder<'_>) -> bool {
     false
 }
 
+fn is_in_class_static_block(ctx: &SemanticBuilder<'_>) -> bool {
+    ctx.scoping
+        .scope_ancestors(ctx.current_scope_id)
+        .map(|scope_id| ctx.scoping.scope_flags(scope_id))
+        .find_map(|flags| {
+            if flags.is_class_static_block() {
+                return Some(true);
+            }
+            if flags.is_function() {
+                return Some(false);
+            }
+            None
+        })
+        .unwrap_or(false)
+}
+
 pub fn check_await_expression(expr: &AwaitExpression, ctx: &SemanticBuilder<'_>) {
     if is_in_formal_parameters(ctx) {
         ctx.error(diagnostics::await_or_yield_in_parameter("await", expr.span));
     }
     // It is a Syntax Error if ClassStaticBlockStatementList Contains await is true.
-    if ctx.scoping.scope_flags(ctx.current_scope_id).is_class_static_block() {
+    if is_in_class_static_block(ctx) {
         let start = expr.span.start;
         ctx.error(diagnostics::class_static_block_await(Span::sized(start, 5)));
     }

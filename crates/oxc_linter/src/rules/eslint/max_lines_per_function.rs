@@ -6,20 +6,21 @@ use oxc_macros::declare_oxc_lint;
 use oxc_semantic::Semantic;
 use oxc_span::{GetSpan, Span};
 use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
     AstNode,
     ast_util::{get_function_name_with_kind, iter_outer_expressions},
     context::LintContext,
-    rule::Rule,
+    rule::{DefaultRuleConfig, Rule},
     utils::count_comment_lines,
 };
 
 fn max_lines_per_function_diagnostic(
     name: &str,
-    count: usize,
-    max: usize,
+    count: u32,
+    max: u32,
     span: Span,
 ) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!(
@@ -29,11 +30,11 @@ fn max_lines_per_function_diagnostic(
     .with_label(span)
 }
 
-#[derive(Debug, Clone, JsonSchema)]
-#[serde(rename_all = "camelCase", default)]
+#[derive(Debug, Clone, JsonSchema, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct MaxLinesPerFunctionConfig {
     /// Maximum number of lines allowed in a function.
-    max: usize,
+    max: u32,
     /// Skip lines containing just comments.
     skip_comments: bool,
     /// Skip lines made up purely of whitespace.
@@ -45,7 +46,7 @@ pub struct MaxLinesPerFunctionConfig {
     iifes: bool,
 }
 
-const DEFAULT_MAX_LINES_PER_FUNCTION: usize = 50;
+const DEFAULT_MAX_LINES_PER_FUNCTION: u32 = 50;
 
 impl Default for MaxLinesPerFunctionConfig {
     fn default() -> Self {
@@ -58,7 +59,7 @@ impl Default for MaxLinesPerFunctionConfig {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct MaxLinesPerFunction(Box<MaxLinesPerFunctionConfig>);
 
 impl Deref for MaxLinesPerFunction {
@@ -66,6 +67,18 @@ impl Deref for MaxLinesPerFunction {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[cfg(feature = "ruledocs")]
+impl MaxLinesPerFunction {
+    #[expect(clippy::unnecessary_wraps)]
+    pub fn config_schema(
+        r#gen: &mut schemars::r#gen::SchemaGenerator,
+    ) -> Option<schemars::schema::Schema> {
+        let mut schema = r#gen.subschema_for::<MaxLinesPerFunctionConfig>();
+        crate::utils::number_as_object_schema(r#gen, &mut schema, None);
+        Some(schema)
     }
 }
 
@@ -118,49 +131,31 @@ declare_oxc_lint!(
     eslint,
     pedantic,
     config = MaxLinesPerFunctionConfig,
+    version = "0.15.12",
+    short_description = "Enforce a maximum number of lines of code in a function.",
 );
 
 impl Rule for MaxLinesPerFunction {
     fn from_configuration(value: Value) -> Result<Self, serde_json::error::Error> {
         let config = value.get(0);
-        let config = if let Some(max) = config
+        if let Some(max) = config
             .and_then(Value::as_number)
             .and_then(serde_json::Number::as_u64)
-            .and_then(|v| usize::try_from(v).ok())
+            .and_then(|v| u32::try_from(v).ok())
         {
-            MaxLinesPerFunctionConfig {
+            Ok(Self(Box::new(MaxLinesPerFunctionConfig {
                 max,
                 skip_comments: false,
                 skip_blank_lines: false,
                 iifes: false,
-            }
+            })))
         } else {
-            let max = config
-                .and_then(|config| config.get("max"))
-                .and_then(Value::as_number)
-                .and_then(serde_json::Number::as_u64)
-                .map_or(DEFAULT_MAX_LINES_PER_FUNCTION, |v| {
-                    usize::try_from(v).unwrap_or(DEFAULT_MAX_LINES_PER_FUNCTION)
-                });
-            let skip_comments = config
-                .and_then(|config| config.get("skipComments"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let skip_blank_lines = config
-                .and_then(|config| config.get("skipBlankLines"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let iifes = config
-                .and_then(|config| config.get("IIFEs"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-
-            MaxLinesPerFunctionConfig { max, skip_comments, skip_blank_lines, iifes }
-        };
-
-        Ok(Self(Box::new(config)))
+            serde_json::from_value::<DefaultRuleConfig<Self>>(value)
+                .map(DefaultRuleConfig::into_inner)
+        }
     }
 
+    #[expect(clippy::cast_possible_truncation)] // the length of lines can't be over u32::MAX, because the source code is already limited by u32::MAX.
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
         match node.kind() {
             AstKind::Function(f) if f.is_function_declaration() => {}
@@ -191,7 +186,7 @@ impl Rule for MaxLinesPerFunction {
             if code.ends_with('\n') { newlines } else { newlines + 1 }
         };
 
-        let final_lines = lines_in_function.saturating_sub(comment_lines);
+        let final_lines = lines_in_function.saturating_sub(comment_lines) as u32;
         if final_lines > self.max {
             let name = get_function_name_with_kind(node, ctx.nodes().parent_node(node.id()));
             ctx.diagnostic(max_lines_per_function_diagnostic(&name, final_lines, self.max, span));
@@ -435,16 +430,6 @@ fn test() {
             Some(serde_json::json!([1])),
         ),
         (&repeat_60, Some(serde_json::json!([{}]))),
-        (
-            "function name() {
-            var x = 5;
-
-
-
-            var x = 2;
-            }",
-            Some(serde_json::json!([{ "max": 6, "skipComments": false, "skipBlankLines": false }])),
-        ),
         (
             "function name() {
             var x = 5;

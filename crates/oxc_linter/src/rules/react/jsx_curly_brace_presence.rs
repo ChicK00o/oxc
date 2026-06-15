@@ -1,7 +1,7 @@
 use crate::{
     AstNode,
     context::{ContextHost, LintContext},
-    rule::Rule,
+    rule::{DefaultRuleConfig, Rule},
 };
 use lazy_regex::{Lazy, Regex, lazy_regex};
 use oxc_allocator::{Allocator, Vec};
@@ -14,13 +14,12 @@ use oxc_ast::{
     },
 };
 use oxc_codegen::CodegenOptions;
-use oxc_diagnostics::{Error, LabeledSpan, OxcDiagnostic};
+use oxc_diagnostics::{LabeledSpan, OxcDiagnostic};
 use oxc_macros::declare_oxc_lint;
 use oxc_semantic::NodeId;
 use oxc_span::{GetSpan as _, Span};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 fn jsx_curly_brace_presence_unnecessary_diagnostic(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::warn("Curly braces are unnecessary here.").with_label(span)
@@ -36,27 +35,14 @@ fn jsx_curly_brace_presence_necessary_diagnostic(span: Span) -> OxcDiagnostic {
 
 #[derive(Debug, Default, Clone, Copy, JsonSchema, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Allowed {
+enum JsxCurlyBracePresenceMode {
     Always,
     Never,
     #[default]
     Ignore,
 }
 
-impl TryFrom<&str> for Allowed {
-    type Error = ();
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "always" => Ok(Self::Always),
-            "never" => Ok(Self::Never),
-            "ignore" => Ok(Self::Ignore),
-            _ => Err(()),
-        }
-    }
-}
-
-impl Allowed {
+impl JsxCurlyBracePresenceMode {
     pub fn is_never(self) -> bool {
         matches!(self, Self::Never)
     }
@@ -68,20 +54,20 @@ impl Allowed {
 }
 
 #[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct JsxCurlyBracePresence {
     /// Whether to enforce or disallow curly braces for props on JSX elements.
     ///
     /// - `never` will disallow unnecessary curly braces, e.g. this will be preferred: `<Foo foo="bar" />`
     /// - `always` will force the usage of curly braces like this, in all cases: `<Foo foo={'bar'} />`
     /// - `ignore` will allow either style for prop values.
-    props: Allowed,
+    props: JsxCurlyBracePresenceMode,
     /// Whether to enforce or disallow curly braces for child content of a JSX element.
     ///
     /// - `never` will disallow unnecessary curly braces, e.g. this will be preferred: `<Foo>I love oxlint</Foo>`
     /// - `always` will force the usage of curly braces like this, in all cases: `<Foo>{'I love oxlint'}</Foo>`
     /// - `ignore` will allow either style for child content.
-    children: Allowed,
+    children: JsxCurlyBracePresenceMode,
     /// When set to `ignore` or `never`, this JSX code is allowed (or enforced):
     /// `<App prop=<div /> />;`
     ///
@@ -91,15 +77,41 @@ pub struct JsxCurlyBracePresence {
     /// **Note**: it is _highly_ recommended that you set `propElementValues` to `always`.
     /// The ability to omit curly braces around prop values that are JSX elements is obscure, and
     /// intentionally undocumented, and should not be relied upon.
-    prop_element_values: Allowed,
+    prop_element_values: JsxCurlyBracePresenceMode,
 }
 
 impl Default for JsxCurlyBracePresence {
     fn default() -> Self {
         Self {
-            props: Allowed::Never,
-            children: Allowed::Never,
-            prop_element_values: Allowed::Ignore,
+            props: JsxCurlyBracePresenceMode::Never,
+            children: JsxCurlyBracePresenceMode::Never,
+            prop_element_values: JsxCurlyBracePresenceMode::Ignore,
+        }
+    }
+}
+
+#[derive(Debug, JsonSchema, Deserialize)]
+#[serde(untagged)]
+enum JsxCurlyBracePresenceConfig {
+    String(JsxCurlyBracePresenceMode),
+    Object(JsxCurlyBracePresence),
+}
+
+impl Default for JsxCurlyBracePresenceConfig {
+    fn default() -> Self {
+        Self::Object(JsxCurlyBracePresence::default())
+    }
+}
+
+impl JsxCurlyBracePresenceConfig {
+    fn into_rule(self) -> JsxCurlyBracePresence {
+        match self {
+            Self::String(allowed) => JsxCurlyBracePresence {
+                props: allowed,
+                children: allowed,
+                prop_element_values: allowed,
+            },
+            Self::Object(config) => config,
         }
     }
 }
@@ -321,46 +333,15 @@ declare_oxc_lint!(
     react,
     style,
     fix,
-    config = JsxCurlyBracePresence,
+    config = JsxCurlyBracePresenceConfig,
+    version = "0.7.0",
+    short_description = "Disallow unnecessary JSX expressions when literals alone are sufficient.",
 );
 
 impl Rule for JsxCurlyBracePresence {
-    fn from_configuration(value: Value) -> Result<Self, serde_json::error::Error> {
-        let default = Self::default();
-        let value = match value.as_array() {
-            Some(arr) => &arr[0],
-            _ => &value,
-        };
-        match value {
-            Value::String(s) => {
-                // TODO: Replace this with a proper DefaultRuleConfig implementation and handle errors with that.
-                let allowed = Allowed::try_from(s.as_str())
-                .map_err(|()| Error::msg(
-                    r#"Invalid string config for react/jsx-curly-brace-presence: only "always", "never", or "ignore" are allowed. "#
-                )).unwrap();
-                Ok(Self { props: allowed, children: allowed, prop_element_values: allowed })
-            }
-            Value::Object(obj) => {
-                let props = obj
-                    .get("props")
-                    .and_then(Value::as_str)
-                    .and_then(|props| Allowed::try_from(props).ok())
-                    .unwrap_or(default.props);
-                let children = obj
-                    .get("children")
-                    .and_then(Value::as_str)
-                    .and_then(|children| Allowed::try_from(children).ok())
-                    .unwrap_or(default.children);
-                let prop_element_values = obj
-                    .get("propElementValues")
-                    .and_then(Value::as_str)
-                    .and_then(|prop_element_values| Allowed::try_from(prop_element_values).ok())
-                    .unwrap_or(default.prop_element_values);
-
-                Ok(Self { props, children, prop_element_values })
-            }
-            _ => Ok(default),
-        }
+    fn from_configuration(value: serde_json::Value) -> Result<Self, serde_json::error::Error> {
+        serde_json::from_value::<DefaultRuleConfig<JsxCurlyBracePresenceConfig>>(value)
+            .map(|config| config.into_inner().into_rule())
     }
 
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
@@ -460,15 +441,18 @@ impl JsxCurlyBracePresence {
         parent_is_attribute: bool,
     ) {
         let Some(inner) = container.expression.as_expression() else { return };
+        if ctx.has_comments_between(container.span) {
+            return;
+        }
+
         let allowed = if parent_is_attribute { self.props } else { self.children };
         match inner {
-            Expression::JSXFragment(_) => {
+            Expression::JSXFragment(_)
                 if !parent_is_attribute
                     && self.children.is_never()
-                    && !has_adjacent_jsx_expression_containers(ctx, container, node.id())
-                {
-                    report_unnecessary_curly(ctx, container, inner.span());
-                }
+                    && !has_adjacent_jsx_expression_containers(ctx, container, node.id()) =>
+            {
+                report_unnecessary_curly(ctx, container, inner.span());
             }
             Expression::JSXElement(el) => {
                 if parent_is_attribute {
@@ -481,44 +465,42 @@ impl JsxCurlyBracePresence {
                     report_unnecessary_curly(ctx, container, inner.span());
                 }
             }
-            Expression::StringLiteral(string) => {
-                if allowed.is_never() {
-                    let raw = ctx.source_range(string.span().shrink_left(1).shrink_right(1));
-                    if is_allowed_string_like_in_container(
+            Expression::StringLiteral(string) if allowed.is_never() => {
+                let raw = ctx.source_range(string.span().shrink_left(1).shrink_right(1));
+                if is_allowed_string_like_in_container(
+                    ctx,
+                    raw,
+                    container,
+                    node.id(),
+                    parent_is_attribute,
+                ) {
+                    return;
+                }
+                if parent_is_attribute {
+                    report_unnecessary_curly_for_attribute_value(ctx, container, string.span);
+                } else {
+                    report_unnecessary_curly(ctx, container, string.span);
+                }
+            }
+            Expression::TemplateLiteral(template)
+                if allowed.is_never() && template.is_no_substitution_template() =>
+            {
+                let string = template.single_quasi().unwrap();
+                if !parent_is_attribute && contains_quote_characters(string.as_str())
+                    || is_allowed_string_like_in_container(
                         ctx,
-                        raw,
+                        string.as_str(),
                         container,
                         node.id(),
                         parent_is_attribute,
-                    ) {
-                        return;
-                    }
-                    if parent_is_attribute {
-                        report_unnecessary_curly_for_attribute_value(ctx, container, string.span);
-                    } else {
-                        report_unnecessary_curly(ctx, container, string.span);
-                    }
+                    )
+                {
+                    return;
                 }
-            }
-            Expression::TemplateLiteral(template) => {
-                if allowed.is_never() && template.is_no_substitution_template() {
-                    let string = template.single_quasi().unwrap();
-                    if !parent_is_attribute && contains_quote_characters(string.as_str())
-                        || is_allowed_string_like_in_container(
-                            ctx,
-                            string.as_str(),
-                            container,
-                            node.id(),
-                            parent_is_attribute,
-                        )
-                    {
-                        return;
-                    }
-                    if parent_is_attribute {
-                        report_unnecessary_curly_for_attribute_value(ctx, container, template.span);
-                    } else {
-                        report_unnecessary_curly(ctx, container, template.span);
-                    }
+                if parent_is_attribute {
+                    report_unnecessary_curly_for_attribute_value(ctx, container, template.span);
+                } else {
+                    report_unnecessary_curly(ctx, container, template.span);
                 }
             }
             _ => {}
@@ -534,8 +516,9 @@ fn is_allowed_string_like_in_container<'a>(
     is_prop: bool,
 ) -> bool {
     is_whitespace(s)
-        || contains_line_break_or_is_empty(s)
+        || contains_line_break(s)
         || contains_html_entity(s)
+        || is_prop && contains_both_quote_characters(s)
         || !is_prop && contains_disallowed_jsx_text_chars(s)
         || !is_prop && s.trim() != s
         || contains_multiline_comment(s)
@@ -545,11 +528,11 @@ fn is_allowed_string_like_in_container<'a>(
 }
 
 fn is_whitespace(s: &str) -> bool {
-    s.chars().all(char::is_whitespace)
+    !s.is_empty() && s.chars().all(char::is_whitespace)
 }
 
-fn contains_line_break_or_is_empty(s: &str) -> bool {
-    s.chars().any(|c| matches!(c, '\n' | '\r')) || s.trim().is_empty()
+fn contains_line_break(s: &str) -> bool {
+    s.chars().any(|c| matches!(c, '\n' | '\r'))
 }
 
 fn contains_line_break_literal(s: &str) -> bool {
@@ -570,6 +553,14 @@ fn contains_quote_characters(s: &str) -> bool {
 
 fn contains_double_quote_characters(s: &str) -> bool {
     s.chars().any(|c| matches!(c, '"'))
+}
+
+fn contains_single_quote_characters(s: &str) -> bool {
+    s.chars().any(|c| matches!(c, '\''))
+}
+
+fn contains_both_quote_characters(s: &str) -> bool {
+    contains_double_quote_characters(s) && contains_single_quote_characters(s)
 }
 
 fn contains_utf8_escape(s: &str) -> bool {
@@ -750,8 +741,7 @@ fn build_missing_curly_fix_context_for_part(
     part.char_indices().find(|(_, ch)| !ch.is_whitespace()).map(|(first_char_index, _)| {
         let text = part.split_at(first_char_index).1;
         let new_start = span.start + part_start + u32::try_from(first_char_index).unwrap();
-        let span_from_first_char =
-            Span::new(new_start, new_start + u32::try_from(text.len()).unwrap());
+        let span_from_first_char = Span::sized(new_start, u32::try_from(text.len()).unwrap());
         (span_from_first_char, text)
     })
 }
@@ -1065,6 +1055,20 @@ fn test() {
         ("<App label={`${label}`} />", Some(json!(["never"]))),
         ("<App>{`${label}`}</App>", Some(json!(["never"]))),
         (r#"<div>{`Nobody's "here"`}</div>"#, None),
+        (r#"<Foo bar={`a "x" 'y'`} />;"#, Some(json!(["never"]))),
+        ("<App>{<Component>{/* keep */}</Component>}</App>", None),
+        (r"<Component name={/* This is a comment */ 'test'} />", None),
+        (
+            r"
+                    <ComponentA>
+                        {
+                            // This is another comment
+                            <ComponentB />
+                        }
+                    </ComponentA>;
+                  ",
+            None,
+        ),
     ];
 
     let fail = vec![
@@ -1215,6 +1219,8 @@ fn test() {
                   "#,
             Some(json!(["never"])),
         ),
+        (r#"<Image alt={""} />"#, Some(json!([{ "props": "never", "children": "never" }]))),
+        (r#"<App>{""}</App>"#, Some(json!([{ "props": "never", "children": "never" }]))),
     ];
 
     let fix = vec![
@@ -1533,6 +1539,16 @@ fn test() {
                     <Foo help='The maximum time range for searches. (i.e. "P30D" for 30 days, "PT24H" for 24 hours)' />
                   "#,
             Some(json!(["never"])),
+        ),
+        (
+            r#"<Image alt={""} />"#,
+            r#"<Image alt="" />"#,
+            Some(json!([{ "props": "never", "children": "never" }])),
+        ),
+        (
+            r#"<App>{""}</App>"#,
+            r"<App></App>",
+            Some(json!([{ "props": "never", "children": "never" }])),
         ),
         (
             "

@@ -133,8 +133,11 @@ declare_oxc_lint!(
     SwitchExhaustivenessCheck(tsgolint),
     typescript,
     pedantic,
-    pending,
+    // Does not have a suggestion for all cases, e.g. nothing for an unnecessary `default` branch right now.
+    conditional_suggestion,
     config = SwitchExhaustivenessCheckConfig,
+    version = "1.12.0",
+    short_description = "This rule requires switch statements to be exhaustive when switching on union types.",
 );
 
 impl Rule for SwitchExhaustivenessCheck {

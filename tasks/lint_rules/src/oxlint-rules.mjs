@@ -4,40 +4,44 @@ import unsupportedRules from "./unsupported-rules.json" with { type: "json" };
 import { typescriptTypeCheckRules } from "./eslint-rules.mjs";
 
 const readAllImplementedRuleNames = async () => {
-  const rulesFile = await readFile(resolve("crates/oxc_linter/src/rules.rs"), "utf8");
+  const rulesFile = await readFile(
+    resolve("crates/oxc_linter/src/generated/rules_enum.rs"),
+    "utf8",
+  );
 
   /** @type {Set<string>} */
   const rules = new Set();
 
-  let found = false;
-  for (let line of rulesFile.split("\n")) {
-    line = line.trim();
+  // Parse lines like: pub use crate::rules::<plugin>::<rule_module>::<RuleName> as <PluginRuleName>;
+  const regex = /^pub use crate::rules::(\w+)::(\w+)::/;
 
-    // Skip commented out rules
-    if (line.startsWith("//")) continue;
+  for (const line of rulesFile.split("\n")) {
+    const match = line.match(regex);
+    if (!match) continue;
 
-    if (line === "oxc_macros::declare_all_lint_rules! {") {
-      found = true;
-      continue;
+    const [, plugin, ruleModule] = match;
+
+    // Convert snake_case to kebab-case for both plugin and rule name
+    const pluginName = plugin.replaceAll("_", "-");
+    const ruleName = ruleModule.replaceAll("_", "-");
+    let prefixedName = `${pluginName}/${ruleName}`;
+
+    // Ignore oxc rules (no reference rules)
+    if (prefixedName.startsWith("oxc/")) continue;
+
+    // Handle node -> n rename for eslint-plugin-n compatibility
+    if (prefixedName.startsWith("node/")) {
+      prefixedName = prefixedName.replace(/^node/, "n");
     }
-    if (found && line === "}") {
-      return rules;
-    }
 
-    if (found) {
-      let prefixedName = line.replaceAll(",", "").replaceAll("::", "/").replaceAll("_", "-");
-
-      // Ignore no reference rules
-      if (prefixedName.startsWith("oxc/")) continue;
-      if (prefixedName.startsWith("node/")) {
-        prefixedName = prefixedName.replace(/^node/, "n");
-      }
-
-      rules.add(prefixedName);
-    }
+    rules.add(prefixedName);
   }
 
-  throw new Error("Failed to find the end of the rules list");
+  if (rules.size === 0) {
+    throw new Error("Failed to find any rules in the generated rules_enum.rs file");
+  }
+
+  return rules;
 };
 
 /**
@@ -268,60 +272,6 @@ export const overrideTypeScriptPluginStatusWithEslintPluginStatus = async (ruleE
     if (typescriptRuleEntry && eslintRuleEntry) {
       ruleEntries.set(`typescript/${rule}`, {
         ...typescriptRuleEntry,
-        isImplemented: eslintRuleEntry.isImplemented,
-        isPendingFix: eslintRuleEntry.isPendingFix,
-      });
-    }
-  }
-};
-
-/**
- * Some Jest rules are written to be compatible with Vitest, so we should
- * override the status of the Vitest rules to match the Jest rules.
- * @param {RuleEntries} ruleEntries
- */
-export const syncVitestPluginStatusWithJestPluginStatus = async (ruleEntries) => {
-  const vitestCompatibleRulesFile = await readFile("crates/oxc_linter/src/utils/mod.rs", "utf8");
-  const rules = getArrayEntries("VITEST_COMPATIBLE_JEST_RULES", vitestCompatibleRulesFile);
-
-  for (const rule of rules) {
-    const vitestRuleEntry = ruleEntries.get(`vitest/${rule}`);
-    const jestRuleEntry = ruleEntries.get(`jest/${rule}`);
-    if (vitestRuleEntry && jestRuleEntry) {
-      ruleEntries.set(`vitest/${rule}`, {
-        ...vitestRuleEntry,
-        isImplemented: jestRuleEntry.isImplemented,
-        isPendingFix: jestRuleEntry.isPendingFix,
-      });
-    }
-  }
-
-  // Special case: vitest/no-restricted-vi-methods is implemented by jest/no-restricted-jest-methods
-  const vitestRestrictedViMethodsEntry = ruleEntries.get("vitest/no-restricted-vi-methods");
-  const jestRestrictedJestMethodsEntry = ruleEntries.get("jest/no-restricted-jest-methods");
-  if (vitestRestrictedViMethodsEntry && jestRestrictedJestMethodsEntry) {
-    ruleEntries.set("vitest/no-restricted-vi-methods", {
-      ...vitestRestrictedViMethodsEntry,
-      isImplemented: jestRestrictedJestMethodsEntry.isImplemented,
-      isPendingFix: jestRestrictedJestMethodsEntry.isPendingFix,
-    });
-  }
-};
-
-/**
- * Some Unicorn rules rules are re-implemented version of eslint rules.
- * We should override these to make implementation status up-to-date.
- * @param {RuleEntries} ruleEntries
- */
-export const syncUnicornPluginStatusWithEslintPluginStatus = (ruleEntries) => {
-  const rules = new Set(["no-negated-condition"]);
-
-  for (const rule of rules) {
-    const unicornRuleEntry = ruleEntries.get(`unicorn/${rule}`);
-    const eslintRuleEntry = ruleEntries.get(`eslint/${rule}`);
-    if (unicornRuleEntry && eslintRuleEntry) {
-      ruleEntries.set(`unicorn/${rule}`, {
-        ...unicornRuleEntry,
         isImplemented: eslintRuleEntry.isImplemented,
         isPendingFix: eslintRuleEntry.isPendingFix,
       });
