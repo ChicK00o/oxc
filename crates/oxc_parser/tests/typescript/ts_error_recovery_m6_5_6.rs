@@ -27,9 +27,9 @@ fn test_reserved_word_as_variable_name() {
     let result = parse_with_recovery(source);
 
     // Should have 1 error for reserved word
-    assert_eq!(result.errors.len(), 1);
-    assert!(result.errors[0].message.contains("import"));
-    assert!(result.errors[0].message.contains("reserved"));
+    assert_eq!(result.diagnostics.len(), 1);
+    assert!(result.diagnostics[0].to_string().contains("import"));
+    assert!(result.diagnostics[0].to_string().contains("reserved"));
 
     // Both declarations should be in AST
     assert_eq!(result.program.body.len(), 2);
@@ -47,7 +47,7 @@ fn test_multiple_reserved_words() {
     let result = parse_with_recovery(source);
 
     // Should have 3 errors (class, enum, return)
-    assert_eq!(result.errors.len(), 3);
+    assert_eq!(result.diagnostics.len(), 3);
 
     // All 4 declarations should be parsed
     assert_eq!(result.program.body.len(), 4);
@@ -65,8 +65,8 @@ fn test_reserved_word_as_function_name() {
     let result = parse_with_recovery(source);
 
     // Should have at least 1 error for function name
-    assert!(!result.errors.is_empty());
-    assert!(result.errors.iter().any(|e| e.message.contains("class")));
+    assert!(!result.diagnostics.is_empty());
+    assert!(result.diagnostics.iter().any(|e| e.to_string().contains("class")));
 
     // Function and call should be in AST
     assert!(!result.program.body.is_empty());
@@ -82,7 +82,7 @@ fn test_reserved_word_in_expression() {
     let result = parse_with_recovery(source);
 
     // Should have error for using 'import' as identifier in expression
-    assert!(!result.errors.is_empty());
+    assert!(!result.diagnostics.is_empty());
 
     // Both declarations should be parsed
     assert_eq!(result.program.body.len(), 2);
@@ -98,7 +98,7 @@ fn test_reserved_word_multiple_in_same_statement() {
     let result = parse_with_recovery(source);
 
     // Should have errors for class, import, export
-    assert!(result.errors.len() >= 3);
+    assert!(result.diagnostics.len() >= 3);
 
     // Both declarations should be parsed
     assert_eq!(result.program.body.len(), 2);
@@ -118,7 +118,7 @@ fn test_reserved_word_with_subsequent_code() {
     let result = parse_with_recovery(source);
 
     // Should have errors for 'import' usage
-    assert!(!result.errors.is_empty());
+    assert!(!result.diagnostics.is_empty());
 
     // All statements should be parsed
     assert_eq!(result.program.body.len(), 4);
@@ -136,7 +136,7 @@ fn test_reserved_word_in_object() {
     let result = parse_with_recovery(source);
 
     // Property names can be reserved words - should be no errors
-    assert_eq!(result.errors.len(), 0);
+    assert_eq!(result.diagnostics.len(), 0);
     assert_eq!(result.program.body.len(), 1);
 }
 
@@ -150,7 +150,7 @@ fn test_break_as_identifier() {
     let result = parse_with_recovery(source);
 
     // Should have errors for 'break' usage
-    assert!(result.errors.len() >= 2);
+    assert!(result.diagnostics.len() >= 2);
 
     // Both statements should be parsed
     assert_eq!(result.program.body.len(), 2);
@@ -166,7 +166,7 @@ fn test_yield_as_identifier() {
     let result = parse_with_recovery(source);
 
     // Should have errors for 'yield' usage
-    assert!(!result.errors.is_empty());
+    assert!(!result.diagnostics.is_empty());
 
     // Both statements should be parsed
     assert_eq!(result.program.body.len(), 2);
@@ -182,7 +182,7 @@ fn test_await_as_identifier() {
     let result = parse_with_recovery(source);
 
     // Should have errors for 'await' usage
-    assert!(!result.errors.is_empty());
+    assert!(!result.diagnostics.is_empty());
 
     // Both statements should be parsed
     assert_eq!(result.program.body.len(), 2);

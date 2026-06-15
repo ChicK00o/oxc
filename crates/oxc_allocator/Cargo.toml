@@ -60,5 +60,6 @@ pool = []
 serialize = ["dep:serde", "oxc_estree/serialize"]
 track_allocations = []
 disable_track_allocations = []
+tstc_large_types = []
 # Only for use in tests
 testing = []

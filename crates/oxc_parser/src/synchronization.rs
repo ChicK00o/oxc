@@ -7,7 +7,30 @@
 //! All functions in this module respect the `recover_from_errors` flag and only
 //! execute when error recovery is enabled.
 
-use crate::{ParserImpl, context::ParsingContext, lexer::Kind};
+use crate::{ParserConfig as Config, ParserImpl, lexer::Kind};
+
+/// Syntactic regions used by tstc's parser recovery heuristics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsingContext {
+    TopLevel,
+    BlockStatements,
+    FunctionBody,
+    Parameters,
+    ArgumentExpressions,
+    ClassMembers,
+    TypeMembers,
+    EnumMembers,
+    ObjectLiteralMembers,
+    ArrayLiteralMembers,
+    SwitchClauses,
+    ImportSpecifiers,
+    ExportSpecifiers,
+    TypeParameters,
+    TypeArguments,
+    TypeAnnotation,
+    JsxAttributes,
+    JsxChildren,
+}
 
 /// Decision returned by error recovery synchronization.
 ///
@@ -29,7 +52,7 @@ pub enum RecoveryDecision {
     Abort,
 }
 
-impl ParserImpl<'_> {
+impl<'a, C: Config> ParserImpl<'a, C> {
     /// Checks if the current token terminates the given parsing context.
     ///
     /// Returns `true` if the current token marks the end of the context,
@@ -282,20 +305,12 @@ impl ParserImpl<'_> {
             return false;
         }
 
-        // Check all active contexts from inner to outer
-        for ctx in self.context_stack.active_contexts() {
-            // Check if current token terminates this context
-            if self.is_context_terminator(*ctx) {
-                return true;
-            }
-
-            // Check if current token can start an element in this context (recovery mode)
-            if self.is_context_element_start(*ctx, true) {
-                return true;
-            }
-        }
-
-        false
+        self.is_start_of_statement_recovery()
+            || self.at(Kind::RCurly)
+            || self.at(Kind::RParen)
+            || self.at(Kind::RBrack)
+            || self.at(Kind::Semicolon)
+            || self.at(Kind::Eof)
     }
 
     /// Performs error recovery synchronization by deciding whether to skip or abort.

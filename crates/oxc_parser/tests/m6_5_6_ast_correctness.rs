@@ -25,7 +25,7 @@ let z = 10;
         .parse();
 
     // Should have errors
-    assert!(!ret.errors.is_empty(), "Expected parse errors");
+    assert!(!ret.diagnostics.is_empty(), "Expected parse errors");
 
     // Parser should NOT panic in recovery mode
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -52,7 +52,7 @@ function test() {
         .parse();
 
     // Should have errors for reserved words
-    assert!(!ret.errors.is_empty(), "Expected reserved word errors");
+    assert!(!ret.diagnostics.is_empty(), "Expected reserved word errors");
 
     // But AST should be valid
     let program = ret.program;
@@ -77,7 +77,7 @@ const y = 5;
         .parse();
 
     // Should have error for rest not last
-    assert!(!ret.errors.is_empty(), "Expected rest element error");
+    assert!(!ret.diagnostics.is_empty(), "Expected rest element error");
 
     // Parser should NOT panic in recovery mode
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -103,7 +103,11 @@ function valid() { return 1; }
         .parse();
 
     // Should have multiple errors
-    assert!(ret.errors.len() >= 3, "Expected at least 3 errors, got {}", ret.errors.len());
+    assert!(
+        ret.diagnostics.len() >= 3,
+        "Expected at least 3 errors, got {}",
+        ret.diagnostics.len()
+    );
 
     // Parser should NOT panic in recovery mode
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -129,7 +133,7 @@ let x = 5;
         .with_options(ParseOptions { recover_from_errors: true, ..Default::default() })
         .parse();
 
-    assert!(!ret.errors.is_empty(), "Expected paren error");
+    assert!(!ret.diagnostics.is_empty(), "Expected paren error");
 
     // Parser should NOT panic in recovery mode
     assert!(!ret.panicked, "Parser should not panic in recovery mode");

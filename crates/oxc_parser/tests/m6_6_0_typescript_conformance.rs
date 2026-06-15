@@ -19,7 +19,7 @@ fn parse_typescript_file(path: &Path) -> (usize, bool) {
 
     let result = Parser::new(&allocator, &source, source_type).with_options(options).parse();
 
-    let error_count = result.errors.len();
+    let error_count = result.diagnostics.len();
     // Success if we generated any program (even with empty body, as long as no panic)
     let has_program = !result.panicked;
 

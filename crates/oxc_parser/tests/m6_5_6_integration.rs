@@ -25,7 +25,7 @@ const valid = 42;
         .parse();
 
     // Should detect multiple errors
-    assert!(ret.errors.len() >= 2, "Expected multiple errors");
+    assert!(ret.diagnostics.len() >= 2, "Expected multiple errors");
 
     // Parser should NOT panic
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -52,7 +52,7 @@ const z = 10;
         .parse();
 
     // Should have errors
-    assert!(!ret.errors.is_empty(), "Expected parse errors");
+    assert!(!ret.diagnostics.is_empty(), "Expected parse errors");
 
     // Parser should NOT panic
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -78,7 +78,7 @@ const result = func(1, 2;
         .parse();
 
     // Should detect multiple errors
-    assert!(ret.errors.len() >= 1, "Expected errors");
+    assert!(ret.diagnostics.len() >= 1, "Expected errors");
 
     // Parser should NOT panic
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -102,7 +102,7 @@ const x = 5;
         .parse();
 
     // Should detect rest parameter error
-    assert!(!ret.errors.is_empty(), "Expected rest parameter error");
+    assert!(!ret.diagnostics.is_empty(), "Expected rest parameter error");
 
     // Parser should NOT panic
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -128,7 +128,7 @@ const x = 10;
         .parse();
 
     // Should detect errors
-    assert!(!ret.errors.is_empty(), "Expected syntax errors");
+    assert!(!ret.diagnostics.is_empty(), "Expected syntax errors");
 
     // Parser should NOT panic
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -151,7 +151,7 @@ const local = 5;
         .parse();
 
     // Should detect syntax errors
-    assert!(!ret.errors.is_empty(), "Expected import/export errors");
+    assert!(!ret.diagnostics.is_empty(), "Expected import/export errors");
 
     // Parser should NOT panic
     assert!(!ret.panicked, "Parser should not panic in recovery mode");

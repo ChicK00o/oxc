@@ -137,7 +137,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Advance lexer's cursor to end of file.
     #[cold]
     pub(crate) fn set_fatal_error(&mut self, error: OxcDiagnostic) {
-        if self.fatal_error.is_none() {
+        if self.options.recover_from_errors {
+            self.error(error);
+        } else if self.fatal_error.is_none() {
             self.lexer.advance_to_end();
             self.fatal_error = Some(FatalError { error, errors_len: self.errors.len() });
         }

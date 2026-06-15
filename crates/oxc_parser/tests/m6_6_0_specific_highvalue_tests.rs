@@ -36,13 +36,13 @@ if ( a1 && (a2 + a3 > 0) {
     let result = Parser::new(&allocator, source, source_type).with_options(options).parse();
 
     // Verify error recovery worked
-    println!("missingCloseParenStatements.ts: {} errors", result.errors.len());
-    for (i, err) in result.errors.iter().enumerate() {
-        println!("  Error {}: {}", i + 1, err.message);
+    println!("missingCloseParenStatements.ts: {} errors", result.diagnostics.len());
+    for (i, err) in result.diagnostics.iter().enumerate() {
+        println!("  Error {}: {}", i + 1, err.to_string());
     }
 
     // Should have errors for missing close parens
-    assert!(!result.errors.is_empty(), "Should report errors for missing parens");
+    assert!(!result.diagnostics.is_empty(), "Should report errors for missing parens");
 
     // Verify no crash/panic
     assert!(!result.panicked, "Parser should not panic");
@@ -53,15 +53,17 @@ if ( a1 && (a2 + a3 > 0) {
     // Check for specific errors mentioned in milestone:
     // Line 2: if ( a1 && (a2 + a3 > 0) { - missing )
     // Line 3: while( (a2 > 0) && a1 - missing )
-    let has_paren_errors =
-        result.errors.iter().any(|e| e.message.contains("Expected") || e.message.contains(")"));
+    let has_paren_errors = result
+        .diagnostics
+        .iter()
+        .any(|e| e.to_string().contains("Expected") || e.to_string().contains(")"));
     assert!(has_paren_errors, "Should report missing paren errors");
 
     // Verify no cascading errors (should be reasonable error count, not 50+)
     assert!(
-        result.errors.len() < 20,
+        result.diagnostics.len() < 20,
         "Should not have cascading errors, got {} errors",
-        result.errors.len()
+        result.diagnostics.len()
     );
 }
 
@@ -81,13 +83,13 @@ function identity<T>(arg: T: T {
 
     let result = Parser::new(&allocator, source, source_type).with_options(options).parse();
 
-    println!("parametersSyntaxErrorNoCrash1.ts: {} errors", result.errors.len());
-    for (i, err) in result.errors.iter().enumerate() {
-        println!("  Error {}: {}", i + 1, err.message);
+    println!("parametersSyntaxErrorNoCrash1.ts: {} errors", result.diagnostics.len());
+    for (i, err) in result.diagnostics.iter().enumerate() {
+        println!("  Error {}: {}", i + 1, err.to_string());
     }
 
     // Verify error is reported
-    assert!(!result.errors.is_empty(), "Should report error for T: T");
+    assert!(!result.diagnostics.is_empty(), "Should report error for T: T");
 
     // Verify function body is parsed: return arg;
     assert!(!result.program.body.is_empty(), "Should parse function declaration");
@@ -98,14 +100,16 @@ function identity<T>(arg: T: T {
     // Verify only 1-2 errors (not cascading)
     // The milestone says "Verify only 1-2 errors (not cascading)"
     assert!(
-        result.errors.len() <= 3,
+        result.diagnostics.len() <= 3,
         "Should have only 1-3 errors (not cascading), got {}",
-        result.errors.len()
+        result.diagnostics.len()
     );
 
     // Check that error mentions expected token
-    let has_expected_error = result.errors.iter().any(|e| {
-        e.message.contains("Expected") || e.message.contains(",") || e.message.contains(")")
+    let has_expected_error = result.diagnostics.iter().any(|e| {
+        e.to_string().contains("Expected")
+            || e.to_string().contains(",")
+            || e.to_string().contains(")")
     });
     assert!(has_expected_error, "Should mention expected ',' or ')'");
 }
@@ -130,13 +134,13 @@ class C {
 
     let result = Parser::new(&allocator, source, source_type).with_options(options).parse();
 
-    println!("errorRecoveryInClassDeclaration.ts: {} errors", result.errors.len());
-    for (i, err) in result.errors.iter().enumerate() {
-        println!("  Error {}: {}", i + 1, err.message);
+    println!("errorRecoveryInClassDeclaration.ts: {} errors", result.diagnostics.len());
+    for (i, err) in result.diagnostics.iter().enumerate() {
+        println!("  Error {}: {}", i + 1, err.to_string());
     }
 
     // Verify error for invalid member
-    assert!(!result.errors.is_empty(), "Should report error for invalid syntax");
+    assert!(!result.diagnostics.is_empty(), "Should report error for invalid syntax");
 
     // Verify class is still parsed
     assert!(!result.program.body.is_empty(), "Should parse class despite error");
@@ -147,9 +151,9 @@ class C {
     // Verify each invalid member gets error (not cascading into many errors)
     // The invalid syntax is "public blaz() {}" inside foo(...) which is invalid
     assert!(
-        result.errors.len() < 10,
+        result.diagnostics.len() < 10,
         "Should not have cascading errors, got {}",
-        result.errors.len()
+        result.diagnostics.len()
     );
 
     // Check semicolon handling in recovery mode
@@ -205,7 +209,7 @@ class C {
         let result = Parser::new(&allocator, source, source_type).with_options(options).parse();
 
         assert!(!result.panicked, "{} should not panic", name);
-        assert!(!result.errors.is_empty(), "{} should report errors", name);
-        println!("{}: {} errors, no panic ✓", name, result.errors.len());
+        assert!(!result.diagnostics.is_empty(), "{} should report errors", name);
+        println!("{}: {} errors, no panic ✓", name, result.diagnostics.len());
     }
 }

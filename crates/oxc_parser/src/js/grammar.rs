@@ -42,10 +42,7 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                         if p.options.recover_from_errors {
                             p.error(diagnostics::invalid_assignment(span));
                             SimpleAssignmentTarget::AssignmentTargetIdentifier(p.ast.alloc(
-                                p.ast.identifier_reference(
-                                    span,
-                                    p.ast.atom("__invalid_assign_target__"),
-                                ),
+                                p.ast.identifier_reference(span, "__invalid_assign_target__"),
                             ))
                         } else {
                             p.fatal_error(diagnostics::invalid_assignment(span))
@@ -65,10 +62,7 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                     if p.options.recover_from_errors {
                         p.error(diagnostics::invalid_assignment(expr.span()));
                         SimpleAssignmentTarget::AssignmentTargetIdentifier(p.ast.alloc(
-                            p.ast.identifier_reference(
-                                expr.span(),
-                                p.ast.atom("__invalid_assign_target__"),
-                            ),
+                            p.ast.identifier_reference(expr.span(), "__invalid_assign_target__"),
                         ))
                     } else {
                         p.fatal_error(diagnostics::invalid_assignment(expr.span()))
@@ -86,12 +80,12 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                     _ => {
                         if p.options.recover_from_errors {
                             p.error(diagnostics::invalid_assignment(expr.span()));
-                            SimpleAssignmentTarget::AssignmentTargetIdentifier(p.ast.alloc(
-                                p.ast.identifier_reference(
+                            SimpleAssignmentTarget::AssignmentTargetIdentifier(
+                                p.ast.alloc(p.ast.identifier_reference(
                                     expr.span(),
-                                    p.ast.atom("__invalid_assign_target__"),
-                                ),
-                            ))
+                                    "__invalid_assign_target__",
+                                )),
+                            )
                         } else {
                             p.fatal_error(diagnostics::invalid_assignment(expr.span()))
                         }
@@ -109,10 +103,7 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                     if p.options.recover_from_errors {
                         p.error(diagnostics::invalid_assignment(expr.span()));
                         SimpleAssignmentTarget::AssignmentTargetIdentifier(p.ast.alloc(
-                            p.ast.identifier_reference(
-                                expr.span(),
-                                p.ast.atom("__invalid_assign_target__"),
-                            ),
+                            p.ast.identifier_reference(expr.span(), "__invalid_assign_target__"),
                         ))
                     } else {
                         p.fatal_error(diagnostics::invalid_assignment(expr.span()))
@@ -130,10 +121,7 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                     if p.options.recover_from_errors {
                         p.error(diagnostics::invalid_assignment(expr.span()));
                         SimpleAssignmentTarget::AssignmentTargetIdentifier(p.ast.alloc(
-                            p.ast.identifier_reference(
-                                expr.span(),
-                                p.ast.atom("__invalid_assign_target__"),
-                            ),
+                            p.ast.identifier_reference(expr.span(), "__invalid_assign_target__"),
                         ))
                     } else {
                         p.fatal_error(diagnostics::invalid_assignment(expr.span()))
@@ -144,10 +132,7 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                 if p.options.recover_from_errors {
                     p.error(diagnostics::invalid_lhs_assignment(expr.span()));
                     SimpleAssignmentTarget::AssignmentTargetIdentifier(p.ast.alloc(
-                        p.ast.identifier_reference(
-                            expr.span(),
-                            p.ast.atom("__invalid_assign_target__"),
-                        ),
+                        p.ast.identifier_reference(expr.span(), "__invalid_assign_target__"),
                     ))
                 } else {
                     p.fatal_error(diagnostics::invalid_lhs_assignment(expr.span()))
@@ -157,10 +142,7 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                 if p.options.recover_from_errors {
                     p.error(diagnostics::invalid_assignment(expr.span()));
                     SimpleAssignmentTarget::AssignmentTargetIdentifier(p.ast.alloc(
-                        p.ast.identifier_reference(
-                            expr.span(),
-                            p.ast.atom("__invalid_assign_target__"),
-                        ),
+                        p.ast.identifier_reference(expr.span(), "__invalid_assign_target__"),
                     ))
                 } else {
                     p.fatal_error(diagnostics::invalid_assignment(expr.span()))

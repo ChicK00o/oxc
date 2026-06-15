@@ -106,7 +106,7 @@ let x = (a + b;
         .parse();
 
     // Should detect multiple errors
-    assert!(ret.errors.len() >= 2, "Expected at least 2 errors");
+    assert!(ret.diagnostics.len() >= 2, "Expected at least 2 errors");
 
     // Should not panic
     assert!(!ret.panicked, "Should not panic in recovery mode");

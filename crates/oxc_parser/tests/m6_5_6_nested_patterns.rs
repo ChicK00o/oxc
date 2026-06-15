@@ -17,7 +17,7 @@ const y = 5;
         .parse();
 
     // Should detect rest-not-last error in nested pattern
-    assert!(!ret.errors.is_empty(), "Expected rest element error");
+    assert!(!ret.diagnostics.is_empty(), "Expected rest element error");
 
     // Parser should NOT panic in recovery mode
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -40,7 +40,7 @@ const z = 10;
         .parse();
 
     // Should detect error
-    assert!(!ret.errors.is_empty(), "Expected pattern error");
+    assert!(!ret.diagnostics.is_empty(), "Expected pattern error");
 
     // Parser should NOT panic
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -63,7 +63,7 @@ function test() { return 42; }
         .parse();
 
     // Should detect reserved word error in nested pattern
-    assert!(!ret.errors.is_empty(), "Expected reserved word error");
+    assert!(!ret.diagnostics.is_empty(), "Expected reserved word error");
 
     // Parser should NOT panic
     assert!(!ret.panicked, "Parser should not panic in recovery mode");

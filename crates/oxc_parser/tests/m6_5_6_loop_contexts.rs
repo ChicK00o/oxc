@@ -19,7 +19,7 @@ let x = 5;
         .parse();
 
     // Should detect syntax error in for loop
-    assert!(!ret.errors.is_empty(), "Expected syntax error");
+    assert!(!ret.diagnostics.is_empty(), "Expected syntax error");
 
     // Parser should NOT panic in recovery mode
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -44,7 +44,7 @@ const y = 10;
         .parse();
 
     // Should detect rest-not-last error
-    assert!(!ret.errors.is_empty(), "Expected rest element error");
+    assert!(!ret.diagnostics.is_empty(), "Expected rest element error");
 
     // Parser should NOT panic
     assert!(!ret.panicked, "Parser should not panic in recovery mode");
@@ -68,7 +68,7 @@ let y = 5;
         .parse();
 
     // Should detect unclosed paren error
-    assert!(!ret.errors.is_empty(), "Expected paren error");
+    assert!(!ret.diagnostics.is_empty(), "Expected paren error");
 
     // Parser should NOT panic
     assert!(!ret.panicked, "Parser should not panic in recovery mode");

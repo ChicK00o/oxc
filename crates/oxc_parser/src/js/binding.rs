@@ -64,7 +64,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     let dummy_arg = BindingPattern::BindingIdentifier(
                         self.alloc(self.ast.binding_identifier(dummy_span, "__rest__")),
                     );
-                    Some(BindingRestElement { span: rest_elem.span, argument: dummy_arg })
+                    Some(self.ast.binding_rest_element(rest_elem.span, dummy_arg))
                 } else {
                     return self.fatal_error(error);
                 }

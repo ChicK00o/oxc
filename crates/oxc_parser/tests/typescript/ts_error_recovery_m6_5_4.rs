@@ -30,8 +30,8 @@ fn test_index_signature_missing_type_annotation() {
     let result = parse_with_recovery(source);
 
     // Should have 1 error for missing type annotation
-    assert_eq!(result.errors.len(), 1);
-    assert!(result.errors[0].message.contains("type annotation"));
+    assert_eq!(result.diagnostics.len(), 1);
+    assert!(result.diagnostics[0].to_string().contains("type annotation"));
 
     // But program should be parsed successfully
     assert!(!result.program.body.is_empty());
@@ -49,7 +49,7 @@ fn test_index_signature_with_valid_annotation() {
     let result = parse_with_recovery(source);
 
     // Should have no errors
-    assert_eq!(result.errors.len(), 0);
+    assert_eq!(result.diagnostics.len(), 0);
     assert!(!result.program.body.is_empty());
 }
 
@@ -66,7 +66,7 @@ fn test_multiple_index_signatures_with_errors() {
     let result = parse_with_recovery(source);
 
     // Should have 2 errors (one for each missing type annotation)
-    assert_eq!(result.errors.len(), 2);
+    assert_eq!(result.diagnostics.len(), 2);
     assert!(!result.program.body.is_empty());
 }
 
@@ -82,7 +82,7 @@ fn test_readonly_index_signature_error() {
     let result = parse_with_recovery(source);
 
     // Should have 1 error for missing type annotation
-    assert_eq!(result.errors.len(), 1);
+    assert_eq!(result.diagnostics.len(), 1);
     assert!(!result.program.body.is_empty());
 }
 
@@ -100,7 +100,7 @@ fn test_nested_index_signature_errors() {
     let result = parse_with_recovery(source);
 
     // Should have 1 error (inner index signature missing type)
-    assert_eq!(result.errors.len(), 1);
+    assert_eq!(result.diagnostics.len(), 1);
     assert!(!result.program.body.is_empty());
 }
 
@@ -116,7 +116,7 @@ fn test_type_literal_index_signature_error() {
     let result = parse_with_recovery(source);
 
     // Should have 1 error for missing type annotation
-    assert_eq!(result.errors.len(), 1);
+    assert_eq!(result.diagnostics.len(), 1);
     assert!(!result.program.body.is_empty());
 }
 
@@ -135,7 +135,7 @@ fn test_enum_numeric_decimal_member() {
     let result = parse_with_recovery(source);
 
     // Should have 2 errors (for 123 and 456)
-    assert_eq!(result.errors.len(), 2);
+    assert_eq!(result.diagnostics.len(), 2);
     assert!(!result.program.body.is_empty());
 }
 
@@ -152,7 +152,7 @@ fn test_enum_numeric_hex_member() {
     let result = parse_with_recovery(source);
 
     // Should have 2 errors (for 0xFF and 0x10)
-    assert_eq!(result.errors.len(), 2);
+    assert_eq!(result.diagnostics.len(), 2);
     assert!(!result.program.body.is_empty());
 }
 
@@ -168,7 +168,7 @@ fn test_enum_numeric_binary_member() {
     let result = parse_with_recovery(source);
 
     // Should have 1 error (for 0b1010)
-    assert_eq!(result.errors.len(), 1);
+    assert_eq!(result.diagnostics.len(), 1);
     assert!(!result.program.body.is_empty());
 }
 
@@ -185,7 +185,7 @@ fn test_enum_computed_property() {
     let result = parse_with_recovery(source);
 
     // Should have 2 errors (for computed properties)
-    assert_eq!(result.errors.len(), 2);
+    assert_eq!(result.diagnostics.len(), 2);
     assert!(!result.program.body.is_empty());
 }
 
@@ -201,7 +201,7 @@ fn test_enum_template_literal() {
     let result = parse_with_recovery(source);
 
     // Should have 1 error (for template literal)
-    assert_eq!(result.errors.len(), 1);
+    assert_eq!(result.diagnostics.len(), 1);
     assert!(!result.program.body.is_empty());
 }
 
@@ -220,7 +220,7 @@ fn test_enum_mixed_errors() {
     let result = parse_with_recovery(source);
 
     // Should have 4 errors (numeric, computed, template, hex)
-    assert_eq!(result.errors.len(), 4);
+    assert_eq!(result.diagnostics.len(), 4);
     assert!(!result.program.body.is_empty());
 }
 
@@ -237,7 +237,7 @@ fn test_enum_valid_members() {
     let result = parse_with_recovery(source);
 
     // Should have no errors
-    assert_eq!(result.errors.len(), 0);
+    assert_eq!(result.diagnostics.len(), 0);
     assert!(!result.program.body.is_empty());
 }
 
@@ -253,9 +253,9 @@ fn test_using_declaration_export() {
     let result = parse_with_recovery(source);
 
     // Should have 1 error for export using
-    assert_eq!(result.errors.len(), 1);
+    assert_eq!(result.diagnostics.len(), 1);
     assert!(
-        result.errors[0].message.contains("exported") || result.errors[0].message.contains("using")
+        result.diagnostics[0].to_string().contains("exported") || result.diagnostics[0].to_string().contains("using")
     );
 
     // Should have 2 statements (using declaration + let)
@@ -272,9 +272,9 @@ fn test_await_using_declaration_export() {
     let result = parse_with_recovery(source);
 
     // Should have 1 error for export await using
-    assert_eq!(result.errors.len(), 1);
+    assert_eq!(result.diagnostics.len(), 1);
     assert!(
-        result.errors[0].message.contains("exported") || result.errors[0].message.contains("using")
+        result.diagnostics[0].to_string().contains("exported") || result.diagnostics[0].to_string().contains("using")
     );
 
     // Should have 2 statements
@@ -292,7 +292,7 @@ fn test_multiple_using_errors() {
     let result = parse_with_recovery(source);
 
     // Should have 2 errors (one for each export using)
-    assert_eq!(result.errors.len(), 2);
+    assert_eq!(result.diagnostics.len(), 2);
 
     // Should have 3 statements
     assert_eq!(result.program.body.len(), 3);
@@ -308,7 +308,7 @@ fn test_using_declaration_valid() {
     let result = parse_with_recovery(source);
 
     // Should have no errors (using without export is valid)
-    assert_eq!(result.errors.len(), 0);
+    assert_eq!(result.diagnostics.len(), 0);
     assert_eq!(result.program.body.len(), 2);
 }
 
@@ -335,7 +335,7 @@ fn test_all_typescript_errors_combined() {
     let result = parse_with_recovery(source);
 
     // Should have 3 errors (index sig, enum member, using export)
-    assert_eq!(result.errors.len(), 3);
+    assert_eq!(result.diagnostics.len(), 3);
 
     // Should have 4 top-level items (interface, enum, export, let)
     assert_eq!(result.program.body.len(), 4);
@@ -364,7 +364,7 @@ fn test_recovery_continues_after_errors() {
     let result = parse_with_recovery(source);
 
     // Should have multiple errors but all constructs parsed
-    assert!(result.errors.len() >= 3);
+    assert!(result.diagnostics.len() >= 3);
     assert_eq!(result.program.body.len(), 3);
 }
 
@@ -383,5 +383,5 @@ fn test_recovery_without_flag() {
     let result = Parser::new(&allocator, source, source_type).parse();
 
     // Should still report error
-    assert!(result.errors.len() >= 1);
+    assert!(result.diagnostics.len() >= 1);
 }

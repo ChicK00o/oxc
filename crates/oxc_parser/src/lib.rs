@@ -73,6 +73,7 @@ mod error_handler;
 mod modifiers;
 mod module_record;
 mod state;
+mod synchronization;
 
 mod js;
 mod jsx;
@@ -231,6 +232,15 @@ pub struct ParseOptions {
     ///
     /// [`V8IntrinsicExpression`]: oxc_ast::ast::V8IntrinsicExpression
     pub allow_v8_intrinsics: bool,
+
+    /// Continue parsing after recoverable syntax errors.
+    ///
+    /// This tstc fork option enables TSC-style error recovery used by the
+    /// conformance runner. Upstream OXC performs some recovery by default, but
+    /// tstc needs an explicit switch for additional synchronization paths.
+    ///
+    /// Default: `false`
+    pub recover_from_errors: bool,
 }
 
 impl Default for ParseOptions {
@@ -241,6 +251,7 @@ impl Default for ParseOptions {
             allow_return_outside_function: false,
             preserve_parens: true,
             allow_v8_intrinsics: false,
+            recover_from_errors: false,
         }
     }
 }
