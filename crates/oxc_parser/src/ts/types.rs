@@ -916,6 +916,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             return None;
         }
         let checkpoint = self.checkpoint();
+        let errors_count = self.errors_count();
         let span = self.start_span();
         if !self.re_lex_ts_l_angle() {
             self.rewind(checkpoint);
@@ -932,7 +933,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
         self.re_lex_ts_r_angle();
         self.expect(Kind::RAngle);
-        if self.fatal_error.is_some() || !self.can_follow_type_arguments_in_expr() {
+        if self.fatal_error.is_some()
+            || self.errors_count() != errors_count
+            || !self.can_follow_type_arguments_in_expr()
+        {
             self.rewind(checkpoint);
             return None;
         }
